@@ -1,34 +1,73 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- 空域载具八叉树三维寻路 —— 模块统一入口
+  <!-- ============================================================
+       空域载具八叉树三维寻路 —— 模块统一入口
+
        用法：
          roslaunch octree_uav_3d_pathfinding main.launch
-         roslaunch octree_uav_3d_pathfinding main.launch gui:=true
-         roslaunch octree_uav_3d_pathfinding main.launch duration:=20
-  -->
+         roslaunch octree_uav_3d_pathfinding main.launch gui:=false     # 无界面运行
+         roslaunch octree_uav_3d_pathfinding main.launch rviz:=false    # 不开 RViz
 
-  <arg name="gui" default="false"/>
-  <arg name="rviz" default="false"/>
-  <arg name="duration" default="10"/>
+       运行内容：
+         1) 启动 Gazebo 并载入障碍场景 obstacle_course.world
+         2) 在起点生成质点四旋翼（带 3D 激光雷达，点云发布到 /cloud_in）
+         3) 运行环境自检节点 main.py（检查完成后自动退出，不影响仿真）
+         4) 启动 RViz 显示点云，以及后续的八叉树地图与规划路径
+       ============================================================ -->
 
+  <!-- 是否启动 Gazebo 图形界面 -->
+  <arg name="gui" default="true"/>
+
+  <!-- 是否启动 RViz -->
+  <arg name="rviz" default="true"/>
+
+  <!-- 是否运行环境自检节点 -->
+  <arg name="check" default="true"/>
+
+  <!-- 障碍场景文件 -->
+  <arg name="world"
+       default="$(find octree_uav_3d_pathfinding)/models/obstacle_course.world"/>
+
+  <!-- 四旋翼起飞位置 -->
+  <arg name="start_x" default="0"/>
+  <arg name="start_y" default="0"/>
+  <arg name="start_z" default="2.0"/>
+
+  <!-- 载入参数配置 -->
   <rosparam command="load"
             file="$(find octree_uav_3d_pathfinding)/config/params.yaml"/>
 
+  <!-- 启动 Gazebo 并载入障碍场景 -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world)"/>
     <arg name="gui" value="$(arg gui)"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="debug" value="false"/>
   </include>
 
-  <node pkg="octree_uav_3d_pathfinding"
+  <!-- 在起点生成质点四旋翼；3D 激光雷达随之启动，点云发布到 /cloud_in -->
+  <node name="spawn_quadrotor"
+        pkg="gazebo_ros"
+        type="spawn_model"
+        output="screen"
+        args="-sdf
+              -file $(find octree_uav_3d_pathfinding)/models/quadrotor.sdf
+              -model quadrotor
+              -x $(arg start_x) -y $(arg start_y) -z $(arg start_z)"/>
+
+  <!-- 环境与链路自检节点
+       不设 required，节点退出后仿真继续运行，便于观察点云 -->
+  <node if="$(arg check)"
+        pkg="octree_uav_3d_pathfinding"
         type="main.py"
         name="uav_env_check"
         output="screen"
-        required="true">
-    <param name="check_duration" value="$(arg duration)"/>
+        required="false">
+    <param name="check_duration" value="5.0"/>
   </node>
 
+  <!-- RViz：显示点云、八叉树地图与规划路径 -->
   <node if="$(arg rviz)"
         pkg="rviz"
         type="rviz"

@@ -1,0 +1,126 @@
+<?xml version="1.0" ?>
+<!--
+  质点四旋翼模型（自搭方案）
+
+  设计说明：
+    · 机体为 0.42 x 0.42 x 0.12 m 的立方体，质量 1 kg，四个旋翼仅作视觉表示
+    · 本阶段（P2-1）用 <gravity>false</gravity> 让机体稳定悬停，便于先验证传感器链路；
+      下一阶段（P2-2）将开启重力并加入力/力矩控制器，实现真正的质点动力学
+    · 传感器为 3D 激光雷达：水平 360 度 x 垂直 8 线，点云输出到 /cloud_in
+-->
+<sdf version="1.6">
+  <model name="quadrotor">
+    <pose>0 0 2.0 0 0 0</pose>
+
+    <link name="base_link">
+      <gravity>false</gravity>
+
+      <inertial>
+        <mass>1.0</mass>
+        <inertia>
+          <ixx>0.005</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.005</iyy>
+          <iyz>0</iyz>
+          <izz>0.009</izz>
+        </inertia>
+      </inertial>
+
+      <collision name="body_collision">
+        <geometry>
+          <box><size>0.42 0.42 0.12</size></box>
+        </geometry>
+      </collision>
+
+      <visual name="body_visual">
+        <geometry>
+          <box><size>0.42 0.42 0.12</size></box>
+        </geometry>
+        <material>
+          <ambient>0.15 0.15 0.75 1</ambient>
+          <diffuse>0.2 0.2 0.9 1</diffuse>
+        </material>
+      </visual>
+
+      <visual name="rotor_1_visual">
+        <pose>0.24 0.24 0.07 0 0 0</pose>
+        <geometry>
+          <cylinder><radius>0.13</radius><length>0.02</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.15 0.15 0.15 1</diffuse>
+        </material>
+      </visual>
+
+      <visual name="rotor_2_visual">
+        <pose>0.24 -0.24 0.07 0 0 0</pose>
+        <geometry>
+          <cylinder><radius>0.13</radius><length>0.02</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.15 0.15 0.15 1</diffuse>
+        </material>
+      </visual>
+
+      <visual name="rotor_3_visual">
+        <pose>-0.24 0.24 0.07 0 0 0</pose>
+        <geometry>
+          <cylinder><radius>0.13</radius><length>0.02</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.15 0.15 0.15 1</diffuse>
+        </material>
+      </visual>
+
+      <visual name="rotor_4_visual">
+        <pose>-0.24 -0.24 0.07 0 0 0</pose>
+        <geometry>
+          <cylinder><radius>0.13</radius><length>0.02</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.15 0.15 0.15 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- 3D 激光雷达：水平 360 度、垂直 8 线 -->
+      <sensor type="ray" name="lidar3d">
+        <pose>0 0 0.06 0 0 0</pose>
+        <visualize>false</visualize>
+        <update_rate>10</update_rate>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.141593</min_angle>
+              <max_angle>3.141593</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>8</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.35</min_angle>
+              <max_angle>0.35</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.3</min>
+            <max>20.0</max>
+            <resolution>0.01</resolution>
+          </range>
+        </ray>
+        <plugin name="gazebo_ros_block_laser" filename="libgazebo_ros_block_laser.so">
+          <topicName>/cloud_in</topicName>
+          <frameName>base_link</frameName>
+          <radiation>laser</radiation>
+          <gaussianNoise>0.005</gaussianNoise>
+        </plugin>
+      </sensor>
+
+    </link>
+  </model>
+</sdf>
