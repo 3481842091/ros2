@@ -213,12 +213,12 @@ cd ~/uav_ws && catkin_make
 # 载入工作空间环境
 source ~/uav_ws/devel/setup.bash
 
-# 一条命令启动仿真器与主入口节点
+# 启动仿真世界、四旋翼飞行器、位置控制器与环境自检
 roslaunch octree_uav_3d_pathfinding main.launch
 ```
 
 主入口节点会依次输出运行环境信息（ROS 发行版、Python 版本、Gazebo 版本、octomap 版本），
-并检查仿真时钟桥接、Gazebo 服务、话题通信三项。运行结束后自动退出。
+并检查仿真时钟桥接、Gazebo 服务、话题通信三项。自检节点在数秒后自动退出，而仿真世界与位置控制器继续运行，便于进一步观察点云与飞行器的运动；模块的完整说明与运行效果见源码目录下的 README.md。
 
 三项检查全部通过时的输出如下：
 
@@ -226,7 +226,7 @@ roslaunch octree_uav_3d_pathfinding main.launch
 [INFO] 模块: octree_uav_3d_pathfinding  v0.1.0
 [INFO] ROS 发行版      : noetic
 [INFO] [1/3] 仿真时钟桥接正常：已收到 1455 帧 /clock 数据
-[INFO] [2/3] Gazebo 服务正常：当前世界包含 2 个模型
+[INFO] [2/3] Gazebo 服务正常：当前世界包含 14 个模型
 [INFO] [3/3] 心跳话题正常：已向 /uav_status 发布消息
 [INFO] 检查结果：
 [INFO]   [通过] 仿真时钟桥接
