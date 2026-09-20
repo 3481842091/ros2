@@ -24,6 +24,9 @@
   <!-- 是否运行环境自检节点 -->
   <arg name="check" default="true"/>
 
+  <!-- 是否启动位置控制器（关闭后飞行器不受控，会自由下落） -->
+  <arg name="control" default="true"/>
+
   <!-- 障碍场景文件 -->
   <arg name="world"
        default="$(find octree_uav_3d_pathfinding)/models/obstacle_course.world"/>
@@ -66,6 +69,15 @@
         required="false">
     <param name="check_duration" value="5.0"/>
   </node>
+
+  <!-- 质点四旋翼位置控制器
+       订阅 /ground_truth/odom 获取位姿与速度，向 /quadrotor/wrench 施加外力，
+       使飞行器稳定悬停并受控飞向 /uav/goal 指定的目标点 -->
+  <node if="$(arg control)"
+        pkg="octree_uav_3d_pathfinding"
+        type="uav_controller.py"
+        name="uav_controller"
+        output="screen"/>
 
   <!-- RViz：显示点云、八叉树地图与规划路径 -->
   <node if="$(arg rviz)"

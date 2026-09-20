@@ -28,20 +28,32 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
 )
 
+###################################
+## catkin specific configuration ##
+###################################
 catkin_package(
   INCLUDE_DIRS include
+#  LIBRARIES octree_uav_3d_pathfinding
   CATKIN_DEPENDS geometry_msgs nav_msgs octomap_msgs octomap_ros pcl_conversions pcl_ros
                  roscpp rospy sensor_msgs std_msgs tf tf2_ros
 )
 
+###########
+## Build ##
+###########
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
 )
 
-## Python 节点（入口为 main.py）
+#############
+## Install ##
+#############
+
+## Python 节点
 catkin_install_python(PROGRAMS
   scripts/main.py
+  scripts/uav_controller.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -50,3 +62,8 @@ install(DIRECTORY launch config models rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
   OPTIONAL
 )
+
+#############
+## Testing ##
+#############
+## 测试规则后续补充

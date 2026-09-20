@@ -1,13 +1,37 @@
 # 空域载具八叉树三维寻路 —— 模块参数配置
 #
 # 本文件由 launch/main.launch 通过 <rosparam command="load"> 载入。
+# 参数按节点名分组，节点内可通过 ~参数名 读取。
 
 uav_env_check:
-  # 自检运行时长（秒）。launch 中的 duration 参数会覆盖此值。
-  check_duration: 10.0
+  # 自检运行时长（秒）
+  check_duration: 5.0
   # 等待 /clock 开始发布的超时时间（秒）
   clock_timeout: 30.0
   # 等待 Gazebo 服务就绪的超时时间（秒）
   service_timeout: 30.0
   # 心跳话题名
   status_topic: /uav_status
+
+# 质点四旋翼位置控制器
+uav_controller:
+  # 机体质量（kg），需与 models/quadrotor.sdf 中的 <mass> 一致
+  mass: 1.0
+  # 位置环比例增益：越大回位越快
+  kp: 4.0
+  # 速度环阻尼增益：抑制振荡，取 2*sqrt(kp) 附近为临界阻尼
+  kd: 4.0
+  # 重力加速度，用于重力补偿
+  gravity: 9.81
+  # 外力限幅（N），防止控制量过大导致仿真发散
+  max_force: 40.0
+  # 控制频率（Hz）
+  control_rate: 50.0
+  # 状态输出周期（秒）
+  status_period: 1.0
+  # 到达判定阈值（m）
+  reach_tolerance: 0.15
+  # 初始目标点：默认与起飞位置相同，表现为稳定悬停
+  goal_x: 0.0
+  goal_y: 0.0
+  goal_z: 2.0

@@ -4,16 +4,21 @@
 
   设计说明：
     · 机体为 0.42 x 0.42 x 0.12 m 的立方体，质量 1 kg，四个旋翼仅作视觉表示
-    · 本阶段（P2-1）用 <gravity>false</gravity> 让机体稳定悬停，便于先验证传感器链路；
-      下一阶段（P2-2）将开启重力并加入力/力矩控制器，实现真正的质点动力学
+    · 机体作为"受控质点"：开启重力，由外部控制器施加外力使其悬停或飞向目标
+      （控制器见 scripts/uav_controller.py）
     · 传感器为 3D 激光雷达：水平 360 度 x 垂直 8 线，点云输出到 /cloud_in
+    · 初始位置由 launch 文件通过 spawn_model 的 -x/-y/-z 参数指定，
+      因此模型内部不写 <pose>，避免位置被叠加两次
+
+  插件：
+    · libgazebo_ros_p3d.so    发布里程计 /ground_truth/odom 与 TF（world -> base_link）
+    · libgazebo_ros_force.so  订阅 /quadrotor/wrench，对机体施加外力
+    · libgazebo_ros_block_laser.so  3D 激光雷达，点云发布到 /cloud_in
 -->
 <sdf version="1.6">
   <model name="quadrotor">
-    <pose>0 0 2.0 0 0 0</pose>
 
     <link name="base_link">
-      <gravity>false</gravity>
 
       <inertial>
         <mass>1.0</mass>
@@ -122,5 +127,20 @@
       </sensor>
 
     </link>
+
+    <!-- 位姿与速度反馈：里程计 + TF（world -> base_link） -->
+    <plugin name="ground_truth_odom" filename="libgazebo_ros_p3d.so">
+      <bodyName>base_link</bodyName>
+      <topicName>/ground_truth/odom</topicName>
+      <frameName>world</frameName>
+      <updateRate>50.0</updateRate>
+    </plugin>
+
+    <!-- 外力输入：控制器通过该话题对机体施加力 -->
+    <plugin name="force_input" filename="libgazebo_ros_force.so">
+      <bodyName>base_link</bodyName>
+      <topicName>/quadrotor/wrench</topicName>
+    </plugin>
+
   </model>
 </sdf>
