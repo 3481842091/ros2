@@ -95,6 +95,7 @@ nav:
     - AP-CPP 主动感知覆盖路径规划: './ap_cpp_overfomo.md'
     - 空域载具八叉树三维寻路:
         - 环境配置与前置准备: 'air/octree_uav_3d_pathfinding/env_setup.md'
+        - 四旋翼与位置控制: 'air/octree_uav_3d_pathfinding/flight_control.md'
 - 水域载具:
     - 水域载具 ROS2 接口: './water/HoloOcean.md'
     - WSL跑通HoloOcean2的ROS2示例方法: './water/WSL_HoloOcean2_ROS2.md'
