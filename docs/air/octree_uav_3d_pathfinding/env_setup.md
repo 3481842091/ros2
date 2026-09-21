@@ -1,23 +1,28 @@
 # 空域载具八叉树三维寻路的环境配置与前置准备
 
-本文说明在本项目中搭建**空域载具三维寻路**开发环境所需的完整配置流程，包括虚拟机环境、ROS 与 Gazebo 的安装验证、octomap 三维地图依赖，以及工作空间的建立。
+本文说明在本项目中搭建**空域载具三维寻路**开发环境所需的完整配置流程，包括虚拟机环境、
+ROS 与 AirSim 模拟器的安装验证、octomap 三维地图依赖，以及工作空间的建立。
+
+本项目采用"**模拟器在宿主 Windows、ROS 在客户机 Ubuntu**"的分工 —— 模拟器是
+Windows/Unreal 程序，无法装进虚拟机。这一点决定了整个环境配置的形态，详见第 5 节。
 
 ---
 
 ## 1. 环境一览
 
-| 类别 | 项目 | 版本 |
-|---|---|---|
-| 宿主 | 操作系统 | Windows 11 |
-| 宿主 | 虚拟化平台 | VMware Workstation 17.6.4 |
-| 虚拟机 | 操作系统 | Ubuntu 20.04.6 LTS（内核 5.15） |
-| 虚拟机 | 硬件配置 | 6 vCPU / 8 GiB 内存 / 70 GB 磁盘 |
-| ROS | 发行版 | Noetic（ROS 1，1.16.0） |
-| 仿真 | Gazebo | 11.13.0 |
-| 三维地图 | octomap | 1.9.8 |
-| 点云库 | PCL | 1.10 |
+| 位置 | 类别 | 项目 | 版本 |
+|---|---|---|---|
+| 宿主 | 操作系统 | Windows | 11 |
+| 宿主 | 虚拟化平台 | VMware Workstation | 17.6.4 |
+| 宿主 | **模拟器** | **AirSim**（随 OpenHUTB 发行版提供） | **1.8.1** |
+| 客户机 | 操作系统 | Ubuntu | 20.04.6 LTS（内核 5.15） |
+| 客户机 | 硬件配置 | 6 vCPU / 8 GiB 内存 / 70 GB 磁盘 | |
+| 客户机 | ROS | Noetic（ROS 1） | 1.16.0 |
+| 客户机 | 三维地图 | octomap | 1.9.8 |
+| 客户机 | 点云库 | PCL | 1.10 |
+| 客户机 | 构建工具 | catkin | 0.8.10 |
 
-> 虚拟机可从零安装，也可使用预装 ROS 与 Gazebo 的镜像。本文以**预装镜像 + 验证配置**的方式说明。
+> 虚拟机可从零安装，也可使用预装 ROS 的镜像。本文以**预装镜像 + 验证配置**的方式说明。
 
 ---
 
@@ -27,15 +32,18 @@
 
 | 项目 | 建议值 | 说明 |
 |---|---|---|
-| CPU | ≥ 4 核 | Gazebo 物理引擎与 RViz 同时运行时的下限 |
-| 内存 | ≥ 8 GB | 仿真 + 可视化 + 点云处理 |
-| 磁盘 | ≥ 40 GB 可用 | ROS 桌面版、Gazebo 模型库、octomap/PCL |
-| 显卡 | 开启 3D 加速 | 否则 Gazebo 退化为软件渲染，帧率很低 |
-| 网络 | NAT | 与宿主共享网络，便于访问软件源 |
+| CPU | ≥ 4 核 | RViz 与点云处理同时运行时的下限 |
+| 内存 | ≥ 8 GB | 可视化 + 点云 + 八叉树 |
+| 磁盘 | ≥ 40 GB 可用 | ROS 桌面版、octomap/PCL、catkin 编译产物 |
+| 显卡 | 开启 3D 加速 | 否则 RViz 退化为软件渲染，帧率很低 |
+| 网络 | NAT | 与宿主共享网络，便于访问软件源，也是连模拟器的前提 |
 
 下图为 VMware 中该虚拟机的处理器与内存配置：
 
 ![](../../img/air/octree_uav_3d_pathfinding/01_vm_spec.png)
+
+> **注意**：模拟器本身不跑在虚拟机里，所以虚拟机的显卡性能只影响 RViz，
+> 不影响仿真质量 —— 这一点比"虚拟机里跑 Gazebo"的方案轻松得多。
 
 ### 2.2 虚拟网络与登录
 
@@ -48,6 +56,14 @@ ip -4 -br addr
 ```
 
 ![](../../img/air/octree_uav_3d_pathfinding/02_ip_addr.png)
+
+**记住宿主机的 VMnet8 地址**（本机为 `192.168.198.1`）—— 后面连模拟器要用它，
+不能用 `127.0.0.1`：
+
+```shell
+# 查看默认网关（通常就是宿主的 VMnet8 地址所在网段）
+ip route | grep default
+```
 
 ---
 
@@ -108,9 +124,8 @@ rospack list | wc -l
 
 ```shell
 # 逐个检查三维寻路所需的包是否存在
-for p in octomap octomap_msgs octomap_ros move_base ompl \
-         pcl_ros pcl_conversions gazebo_ros gazebo_plugins \
-         rviz tf tf2_ros; do
+for p in octomap octomap_msgs octomap_ros pcl_ros pcl_conversions \
+         visualization_msgs rviz tf tf2_ros; do
   printf '%-20s %s\n' "$p" "$(rospack find $p 2>/dev/null || echo MISSING)"
 done
 ```
@@ -119,7 +134,7 @@ done
 |---|---|
 | `octomap` / `octomap_msgs` / `octomap_ros` | 八叉树地图核心库与 ROS 消息 |
 | `pcl_ros` / `pcl_conversions` | 点云处理与格式转换 |
-| `gazebo_ros` / `gazebo_plugins` | Gazebo 与 ROS 的桥接、传感器插件 |
+| `visualization_msgs` | 占用体素的可视化消息 |
 | `rviz` | 三维可视化 |
 | `tf` / `tf2_ros` | 坐标变换 |
 
@@ -127,39 +142,119 @@ done
 
 ![](../../img/air/octree_uav_3d_pathfinding/06_ros_pkgs.png)
 
+> 与早期方案相比，这里**不再需要 `gazebo_ros` / `gazebo_plugins`** ——
+> 模拟器换成了宿主上的 AirSim，与 ROS 之间走的是 RPC 而不是 Gazebo 插件。
+
 ---
 
-## 5. 仿真环境验证
+## 5. 模拟器：AirSim 的启动与连接
 
-启动前需先 `source` ROS 环境。使用 `roslaunch` 可一次性启动 ROS 主节点、Gazebo 服务端与客户端。
+这是本项目环境配置中最特殊的一步：**模拟器不在虚拟机里**。
+
+### 5.1 为什么模拟器在宿主上
+
+模拟器是 **AirSim 1.8.1**（随 [OpenHUTB 低空模拟器](https://openhutb.github.io/air_doc/) 发行版提供），
+本质上是一个 Windows/Unreal 打包程序，**无法安装到 Ubuntu 虚拟机内**。
+
+AirSim 的架构是"**一个 RPC 服务端 + 任意多个客户端**"，所以天然适合这种分工：
+
+```
+宿主 Windows  ── RPC(41451) ──►  客户机 Ubuntu（ROS、我们的节点、RViz）
+```
+
+### 5.2 启动模拟器（宿主侧）
+
+在 Windows 宿主上，**工作目录必须是模拟器包根**（它要读同目录的 `settings.json`）：
+
+```bat
+D:\应用\hutb\CarlaUE4.exe
+```
+
+首次启动、以及第一次加载城市地图时，画面可能要等 30~60 秒才逐渐渲染出来，这是正常的。
+启动完成后应能看到城市场景：
+
+![](../../img/air/octree_uav_3d_pathfinding/08_airsim_simulator.png)
+
+确认 AirSim 的 RPC 端口已经在监听：
+
+```bat
+netstat -ano | findstr 41451
+```
+
+![](../../img/air/octree_uav_3d_pathfinding/09_airsim_rpc.png)
+
+> **如果这个端口不监听**：说明模拟器没有进入 AirSim 的多旋翼模式。
+> 需要检查模拟器包内的 `Config/DefaultEngine.ini`，把 `GlobalDefaultGameMode`
+> 指向 AirSim（该发行版里已定义别名 `AIR` → `/Script/AirSim.AirSimGameMode`）。
+> 若仍不生效，直接写 `/Script/AirSim.AirSimGameMode`。
+
+### 5.3 放行防火墙（宿主侧）
+
+Windows 防火墙默认拦截入站连接，必须显式放行 41451：
+
+```powershell
+# 管理员 PowerShell
+New-NetFirewallRule -DisplayName "AirSim RPC 41451" -Direction Inbound `
+  -Protocol TCP -LocalPort 41451 -Action Allow -Profile Any
+```
+
+> **一个很难查的坑**：Windows 防火墙里**显式 Block 规则优先于显式 Allow 规则**。
+> 如果某个程序第一次监听时弹过"是否允许通信"的窗口并被点了取消，
+> 系统会自动建一条针对该程序的 Block 规则。此时按端口加 Allow **完全无效**，
+> 必须先把它禁用：
+>
+> ```powershell
+> Get-NetFirewallRule | Where-Object { $_.DisplayName -match 'Carla|hutb|AirSim|41451' } |
+>   Select-Object DisplayName, Direction, Action, Enabled | Format-Table -AutoSize
+> Set-NetFirewallRule -DisplayName "<那条 Block 规则的名字>" -Enabled False
+> ```
+
+### 5.4 安装 Python 客户端（客户机侧）
+
+客户机要连 AirSim 的 RPC，需要装它的 Python 客户端：
 
 ```shell
-# 终端 1：启动空世界仿真
-source /opt/ros/noetic/setup.bash
-roslaunch gazebo_ros empty_world.launch
+# 注意顺序不能反！
+pip3 install numpy
+pip3 install msgpack-rpc-python
+pip3 install airsim
 ```
 
-启动成功后应弹出 Gazebo 界面：
+> **为什么顺序不能反**：`airsim` 的 `setup.py` 会 `import airsim` 自己，
+> 而包内的 `types.py` 需要 `msgpackrpc`。如果先装 `airsim`，会在构建元数据阶段
+> 就报 `ModuleNotFoundError: No module named 'msgpackrpc'`。
 
-![](../../img/air/octree_uav_3d_pathfinding/08_gazebo_empty_world.png)
+### 5.5 验证连通性（客户机侧）
 
 ```shell
-# 终端 2：验证 Gazebo 与 ROS 的时钟桥接
-source /opt/ros/noetic/setup.bash
-rostopic hz /clock
+# 0 = 通
+python3 -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex(('192.168.198.1',41451)))"
 ```
 
-输出如下即表示桥接正常（`/clock` 由 Gazebo 发布，用于仿真时间）：
+返回值的含义**必须分清**：
 
+| 返回值 | 含义 | 处理 |
+|---|---|---|
+| **0** | 连通 | 继续下一步 |
+| **11** | **连接超时 / 包被丢弃** | 是**防火墙**问题，回到 5.3 |
+| **111** | **连接被拒绝** | 端口没人监听，模拟器没起来或没进 AirSim 模式 |
+
+进一步确认能取到激光数据：
+
+```shell
+python3 -c "
+import airsim
+c = airsim.MultirotorClient(ip='192.168.198.1', port=41451)
+c.confirmConnection(); print('RPC OK', c.listVehicles())
+d = c.getLidarData(lidar_name='LidarSensor1')
+print('lidar points:', len(d.point_cloud)//3)
+"
 ```
-subscribed to [/clock]
-average rate: 1000.000
-	min: 0.001s max: 0.001s std dev: 0.00002s window: 1000
-```
 
-![](../../img/air/octree_uav_3d_pathfinding/09_clock_check.png)
+输出 `RPC OK ['Drone1']` 与一个正的点数（本机实测约 9700）即表示链路完全打通。
 
-> **常见问题**：若直接运行 `gzserver` 而不通过 `roslaunch`，ROS 主节点不会被启动，`/clock` 话题不会出现，且 `rostopic` 会报 `Unable to communicate with master!`。
+> 载具与激光雷达的详细配置（`settings.json`）见
+> [AirSim 载具与位置控制](./flight_control.md) 第 2 节。
 
 ---
 
@@ -176,26 +271,20 @@ cd ~/uav_ws/src && catkin_init_workspace
 cd ~/uav_ws && catkin_make
 ```
 
-创建本项目的功能包，并声明三维寻路所需依赖：
+本模块的功能包为 `octree_uav_3d_pathfinding`，把它放到工作空间里即可：
 
 ```shell
-cd ~/uav_ws/src
-catkin_create_pkg uav_octree_planner roscpp rospy \
-    std_msgs sensor_msgs nav_msgs geometry_msgs \
-    tf tf2_ros octomap_msgs octomap_ros pcl_ros pcl_conversions
-
-# 建立目录骨架
-cd uav_octree_planner && mkdir -p launch config models rviz
-
-# 重新编译验证
+# 将本模块放入 ~/uav_ws/src/
+# 编译
 cd ~/uav_ws && catkin_make
+source devel/setup.bash
 ```
 
 编译日志中出现以下内容即为成功：
 
 ```
 -- ~~  traversing 1 packages in topological order:
--- ~~  - uav_octree_planner
+-- ~~  - octree_uav_3d_pathfinding
 -- Configuring done
 -- Generating done
 #### Running command: "make -j6 -l6" in "/home/user/uav_ws/build"
@@ -203,38 +292,54 @@ cd ~/uav_ws && catkin_make
 
 ![](../../img/air/octree_uav_3d_pathfinding/10_catkin_workspace.png)
 
+> 本包的 C++ 节点依赖 octomap 的头文件与库，若编译报找不到 `octomap/octomap.h`：
+>
+> ```shell
+> sudo apt install liboctomap-dev
+> ```
+
 ---
 
 ## 7. 编译与运行验证
 
-环境就绪后，编译并运行本模块的主入口，即可一次性验证运行环境与三条关键链路。
+环境就绪后，编译并运行本模块的主入口，即可一次验证**模拟器层**与 **ROS 层**的整条链路。
 
 ```shell
 # 载入工作空间环境
 source ~/uav_ws/devel/setup.bash
 
-# 启动仿真世界、四旋翼飞行器、位置控制器与环境自检
+# 启动桥接、点云建图、环境自检与 RViz
 roslaunch octree_uav_3d_pathfinding main.launch
 ```
 
-主入口节点会依次输出运行环境信息（ROS 发行版、Python 版本、Gazebo 版本、octomap 版本），
-并检查仿真时钟桥接、Gazebo 服务、话题通信三项。自检节点在数秒后自动退出，而仿真世界与位置控制器继续运行，便于进一步观察点云与飞行器的运动；模块的完整说明与运行效果见源码目录下的 README.md。
+主入口的自检节点会依次输出运行环境信息（ROS 发行版、Python 版本、AirSim 客户端版本、
+octomap 版本），并检查四项：**AirSim RPC 连接**、**激光点云链路**、**TF 坐标变换**、
+**话题通信**。自检节点在数秒后自动退出，而仿真与桥接节点继续运行，便于进一步观察点云与飞行器的运动；
+模块的完整说明与运行效果见源码目录下的 README.md。
 
-三项检查全部通过时的输出如下：
+四项检查全部通过时的输出如下：
 
 ```
-[INFO] 模块: octree_uav_3d_pathfinding  v0.1.0
+[INFO] 模块: octree_uav_3d_pathfinding  v0.2.0
 [INFO] ROS 发行版      : noetic
-[INFO] [1/3] 仿真时钟桥接正常：已收到 1455 帧 /clock 数据
-[INFO] [2/3] Gazebo 服务正常：当前世界包含 14 个模型
-[INFO] [3/3] 心跳话题正常：已向 /uav_status 发布消息
+[INFO] AirSim 客户端   : 1.8.1
+[INFO] octomap 版本    : 1.9.8
+[INFO] 模拟器地址      : 192.168.198.1:41451
+[INFO] [1/4] AirSim RPC 正常：载具列表 ['Drone1']
+[INFO] [2/4] 点云链路正常：已收到 1 帧，最新一帧 9669 个点，frame_id=lidar_link
+[INFO] [3/4] TF 正常：world -> base_link，当前位置 (-1.77, 1.12, 0.00)
+[INFO] [4/4] 话题通信正常：/uav/status 收发成功（1 条），订阅者 1 个
 [INFO] 检查结果：
-[INFO]   [通过] 仿真时钟桥接
-[INFO]   [通过] Gazebo 服务
+[INFO]   [通过] AirSim RPC 连接
+[INFO]   [通过] 激光点云链路
+[INFO]   [通过] TF 坐标变换
 [INFO]   [通过] 话题通信
-[INFO]   /clock 平均频率: 1000.0 Hz（累计 1005 帧）
-[INFO] 环境自检全部通过，模块可以开始后续开发。
+[INFO] 环境与链路自检全部通过，模块可以开始后续开发。
 ```
+
+四项的实际运行结果：
+
+![](../../img/air/octree_uav_3d_pathfinding/11_run_verify.png)
 
 详细的编译步骤与参数说明见模块源码目录下的 `README.md`。
 
@@ -243,7 +348,8 @@ roslaunch octree_uav_3d_pathfinding main.launch
 ## 参考
 
 - [ROS Noetic 安装说明](https://wiki.ros.org/noetic/Installation/Ubuntu)
-- [Gazebo 11 官方文档](https://classic.gazebosim.org/)
+- [AirSim 激光雷达文档](https://microsoft.github.io/AirSim/lidar/)
+- [OpenHUTB 低空模拟器文档](https://openhutb.github.io/air_doc/)
 - [OctoMap 官网](https://octomap.github.io/)
 - [catkin 构建系统](https://wiki.ros.org/catkin)
 
@@ -251,4 +357,4 @@ roslaunch octree_uav_3d_pathfinding main.launch
 
 ## 附：大模型使用声明
 
-本文档及配套模块代码在编写过程中使用了 AI 大模型辅助（需求分析、方案讨论、代码与文档起草、问题排查）。全部内容已经过实际运行验证：环境配置步骤在 Ubuntu 20.04.6 + ROS Noetic + Gazebo 11.13.0 环境下逐条执行确认，模块通过 `roslaunch octree_uav_3d_pathfinding main.launch` 运行并输出上述自检结果。作者对提交内容的正确性与完整性负全部责任。
+本文档及配套模块代码在编写过程中使用了 AI 大模型辅助（需求分析、方案讨论、代码与文档起草、问题排查）。全部内容已经过实际运行验证：环境配置步骤在 Ubuntu 20.04.6 + ROS Noetic + AirSim 1.8.1 环境下逐条执行确认，模块通过 `roslaunch octree_uav_3d_pathfinding main.launch` 运行并输出上述自检结果。作者对提交内容的正确性与完整性负全部责任。

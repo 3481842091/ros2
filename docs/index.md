@@ -73,6 +73,8 @@ ROS每章节运行代码:
 
 * [空域载具的八叉树三维寻路](./air/octree_uav_3d_pathfinding/env_setup.md)
 
+* [点云转八叉树占用地图](./air/octree_uav_3d_pathfinding/occupancy_mapping.md)
+
 * [空域模拟器的 ROS 封装器](./air/ros_pkgs.md)
 
 * [无人机终端键盘遥控器](./air/drone_teleop.md)

@@ -6,19 +6,24 @@
 
 ## 运行环境
 
-| 类别 | 项目 | 版本 |
+| 位置 | 项目 | 版本 |
 |---|---|---|
-| 操作系统 | Ubuntu | 20.04.6 LTS |
-| ROS | 发行版 | Noetic (ROS 1, 1.16.0) |
-| 仿真器 | Gazebo | 11.13.0 |
-| 三维地图 | octomap | 1.9.8 |
-| 点云库 | PCL | 1.10 |
-| 构建工具 | catkin | 0.8.10 |
-| Python | 版本 | 3.8 |
+| 宿主 Windows | 模拟器 | **AirSim 1.8.1**（随 OpenHUTB 发行版提供） |
+| 宿主 Windows | 场景 | 城市地图（含多旋翼与 3D 激光雷达） |
+| 客户机 Ubuntu | 操作系统 | 20.04.6 LTS |
+| 客户机 Ubuntu | ROS | Noetic（ROS 1，1.16.0） |
+| 客户机 Ubuntu | 三维地图 | octomap 1.9.8 |
+| 客户机 Ubuntu | 构建工具 | catkin 0.8.10 |
+| 客户机 Ubuntu | Python | 3.8 |
+
+> **模拟器跑在宿主 Windows 上，不在虚拟机里。**
+> AirSim 是 Windows/Unreal 程序，没有办法搬进 Ubuntu。
+> 虚拟机通过 VMnet8 网络连它的 RPC 端口（默认 `41451`），
+> 数据按"模拟器 → RPC → 桥接节点 → ROS 话题"单向流入。
 
 ## 编译
 
-在终端中依次执行：
+在客户机（Ubuntu 虚拟机）里依次执行：
 
     mkdir -p ~/uav_ws/src
     cd ~/uav_ws/src && catkin_init_workspace
@@ -26,151 +31,265 @@
     cd ~/uav_ws && catkin_make
     source ~/uav_ws/devel/setup.bash
 
+依赖分两部分：
+
+    # ROS 侧：点云建图节点是 C++ 的，需要 octomap 的头文件与库
+    sudo apt install liboctomap-dev ros-noetic-octomap ros-noetic-octomap-msgs \
+                     ros-noetic-octomap-ros ros-noetic-visualization-msgs
+
+    # Python 侧：桥接节点要用 AirSim 客户端
+    # 注意顺序不能反：airsim 的 setup.py 会 import 自己，依赖必须先装好
+    pip3 install numpy
+    pip3 install msgpack-rpc-python
+    pip3 install airsim
+
 ## 运行
 
-一条命令启动仿真世界、四旋翼飞行器与位置控制器：
+### 前置条件：先在宿主上启动模拟器
+
+在 Windows 宿主上，**工作目录必须是模拟器包根**（它要读同目录的 `settings.json`）：
+
+    D:\应用\hutb\CarlaUE4.exe
+
+启动后等 30~60 秒让场景加载完，确认 AirSim 的 RPC 端口已经监听：
+
+    netstat -ano | findstr 41451
+
+同时确认宿主防火墙放行 `41451` 的**入站**连接。
+注意 Windows 防火墙的优先级是**显式 Block 盖过显式 Allow**，
+如果之前误点过"取消"，会留下一条 Block 规则，需要先禁用它。
+
+### 一条命令启动模块
 
     roslaunch octree_uav_3d_pathfinding main.launch
+
+它会依次拉起：AirSim 桥接 → 点云建图 → 环境自检（跑完自动退出）→ RViz。
 
 可选的启动参数：
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| gui | true | 是否启动 Gazebo 图形界面 |
+| bridge | true | 是否启动 AirSim 桥接节点 |
+| mapping | true | 是否启动点云建图节点 |
+| check | true | 是否运行环境与链路自检 |
 | rviz | true | 是否启动 RViz |
-| check | true | 是否运行环境自检节点 |
-| control | true | 是否启动位置控制器 |
-| world | models/obstacle_course.world | 障碍场景文件 |
-| start_x / start_y / start_z | 0 / 0 / 2.0 | 起飞位置 |
 
-例如无图形界面运行：
+### 让飞行器飞向目标点
 
-    roslaunch octree_uav_3d_pathfinding main.launch gui:=false rviz:=false
+桥接节点订阅 `/uav/goal`，**目标点使用 ROS 世界系（ENU），单位 m**：
+
+    rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 40.0, y: 0.0, z: 5.0}"
+
+首次收到目标点时飞行器会自动解锁起飞，随后飞向该点；
+八叉树地图沿飞行轨迹不断扩展。
 
 ### 运行效果
-模块启动后，环境自检节点会输出运行环境信息与三项链路检查结果：
+
+环境与链路自检：四项依次检查 **AirSim RPC → 点云链路 → TF → 话题通信**，
+全过之后节点自动退出，不影响仿真继续运行。
 
 ![环境自检](docs/run_verify.png)
 
+AirSim 接进 ROS 之后，RViz 里可以看到激光点云，以及桥接节点广播的
+`base_link` / `lidar_link` 坐标系：
 
-模块启动后，位置控制器使飞行器稳定悬停在 2 m 高度，高度误差约 2 mm：
+![AirSim 连接与点云](docs/airsim_connected.png)
 
-![悬停验证](docs/hover_verify.png)
+向 `/uav/goal` 下发目标点（ROS 世界系 ENU），飞行器自动解锁起飞并飞向该点：
 
-向 /uav/goal 下发目标点，飞行器受控飞向该点：
+    rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 30.0, y: 0.0, z: 15.0}"
 
-    rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 8.0, y: 2.0, z: 3.0}"
+![受控飞行](docs/flight_demo.gif)
 
-![飞行演示](docs/flight_demo.gif)
+点云被增量地插入八叉树，RViz 中出现按高度着色的占用体素（低处偏蓝、高处偏红）：
 
-到达目标点后稳定停住：
+![八叉树占用地图](docs/octomap_rviz.png)
 
-![到达目标点](docs/flight_arrived.png)
+飞行器移动时，地图沿飞行轨迹不断生长：
 
----
+![八叉树地图生长](docs/octomap_growing.gif)
+
+建图节点每 5 秒输出一次统计，可以看到点云在持续进来、体素在增长：
+
+![建图统计输出](docs/octomap_terminal.png)
+
+### 不需要模拟器的离线自检
+
+`scripts/mock_cloud_publisher.py` 会发布一个 20×20×6 m 的假房间点云（含一个悬空方块），
+用来**单独验证"点云 → 八叉树 → RViz"这半条链路**。
+排障时非常有用 —— 能把"桥接/模拟器的问题"和"建图/RViz 的问题"分开：
+
+    # 终端 1：只起建图与 RViz，不起桥接
+    roslaunch octree_uav_3d_pathfinding main.launch bridge:=false check:=false
+
+    # 终端 2：喂假点云
+    python3 scripts/mock_cloud_publisher.py
+
+应在 RViz 中看到一个彩色的空心房间。
 
 ## 模块组成
 
-### 环境自检节点 main.py
+### AirSim 桥接节点 airsim_bridge.py
 
-验证三条关键链路：
+把宿主上的 AirSim 接成标准 ROS 话题。这是本模块唯一与模拟器耦合的地方。
 
-1. 仿真时钟桥接：订阅 /clock，确认 Gazebo 仿真时间已发布到 ROS
-2. Gazebo 服务：调用 /gazebo/get_world_properties，确认仿真器在线
-3. 话题通信：发布心跳话题 /uav_status
+* 轮询 `getMultirotorState()` → 发 `/ground_truth/odom` 与 TF `world → base_link`
+* 轮询 `getLidarData()` → 发 `/cloud_in`（`sensor_msgs/PointCloud2`）
+* 广播静态 TF `base_link → lidar_link`
+* 订阅 `/uav/goal`，转成 NED 后调 `moveToPositionAsync` 驱动飞行器
 
-节点运行指定时长后自动退出，不影响仿真继续运行。
+**注意**：AirSim 的 msgpackrpc 客户端不是线程安全的，
+节点内部用一把锁把所有 AirSim 调用串起来。
 
-### 质点四旋翼 quadrotor.sdf
+### 点云建图节点 pointcloud_to_octomap
 
-机体为 0.42 x 0.42 x 0.12 m、质量 1 kg 的立方体，作为"受控质点"：
-开启重力，由外部控制器施加外力实现悬停与飞行。
+把 `/cloud_in` 的点云增量地插入八叉树。每收到一帧：
 
-搭载 3D 激光雷达（水平 360 度、垂直 8 线，量程 20 m），点云发布到
-/cloud_in，作为八叉树占用地图的输入。
+1. 查 TF，把点云从 `lidar_link` 变换到世界坐标系
+2. 剔除 NaN/inf 与过近的无效点，按 `point_stride` 抽稀
+3. 调 `octomap::OcTree::insertPointCloud()` 做射线投射：
+   射线终点记为占用、途经体素记为空闲、未扫描区域保持未知
+4. 定时发布完整八叉树，并把占用叶节点转成按高度着色的立方体 Marker 供 RViz 显示
 
-### 位置控制器 uav_controller.py
+### 主入口与环境自检 main.py
 
-把飞行器视为受外力控制的质点，按 PD + 重力补偿计算控制量：
+这是模块的入口节点，也是**自检工具**。因为模拟器与 ROS 分处两台机器，
+链路天然分两层，所以自检也分两层做，出问题时能一眼看出是模拟器的事还是 ROS 的事：
 
-    F = m * ( Kp * (p_des - p) + Kd * (v_des - v) + g_vec )
+1. 直连 AirSim RPC，确认模拟器在线并列出载具
+2. 订阅 `/cloud_in`，确认桥接节点把点云送进了 ROS
+3. 查询 TF，确认 `world → base_link` 可用
+4. 发布心跳话题 `/uav_status`，确认节点间通信正常
 
-订阅 /ground_truth/odom 获取位姿与速度，向 /quadrotor/wrench 施加外力，
-使飞行器稳定悬停并可受控飞向目标点。
+跑完指定时长后自动退出，不影响仿真继续运行。
+
+### 离线点云模拟器 mock_cloud_publisher.py
+
+不依赖模拟器，生成一个封闭房间的点云并发到 `/cloud_in`，用于排障与离线演示。
+
+## 坐标系约定
+
+**这是本模块最容易出错的地方**，因为 AirSim 与 ROS 用的坐标系完全不同：
+
+| 层级 | AirSim | ROS | 转换 |
+|---|---|---|---|
+| 世界系 | NED（北-东-地） | ENU（东-北-天） | `(e, n, u) = (y, x, -z)` |
+| 机体系 | FRD（前-右-下） | FLU（前-左-上） | `(x, y, z) = (x, -y, -z)` |
+| 姿态 | 四元数（NED） | 四元数（ENU） | 要按基变换复合：`q_ros = q_Cw ⊗ q_ned ⊗ q_Dx` |
+
+点云的坐标系由模拟器 `settings.json` 里的 `DataFrame` 决定 —— 本模块用
+**`SensorLocalFrame`**（点云在雷达本体系下），这样下游建图节点可以直接套用
+"本体系点云 + TF"的通用做法：一次 TF 查询同时拿到点云变换和射线原点。
 
 ## 主要话题
 
 | 话题 | 类型 | 方向 | 说明 |
 |---|---|---|---|
-| /cloud_in | sensor_msgs/PointCloud | 发布 | 3D 激光雷达点云 |
-| /ground_truth/odom | nav_msgs/Odometry | 发布 | 飞行器位姿与速度 |
-| /quadrotor/wrench | geometry_msgs/Wrench | 订阅 | 施加在机体上的外力 |
-| /uav/goal | geometry_msgs/Point | 订阅 | 位置控制器目标点 |
-| /uav/status | std_msgs/String | 发布 | 控制器运行状态 |
-| /clock | rosgraph_msgs/Clock | 发布 | 仿真时钟（由 Gazebo 提供） |
+| /cloud_in | sensor_msgs/PointCloud2 | 桥接发布 | 激光雷达点云（`lidar_link` 系） |
+| /ground_truth/odom | nav_msgs/Odometry | 桥接发布 | 位姿与速度（ENU） |
+| /uav/goal | geometry_msgs/Point | 桥接订阅 | 目标点（ROS 世界系 ENU） |
+| /tf | tf2_msgs/TFMessage | 桥接发布 | `world → base_link → lidar_link` |
+| /uav/status | std_msgs/String | 桥接发布 | 运行状态 |
+| /octomap_full | octomap_msgs/Octomap | 建图发布 | 完整八叉树地图（latched） |
+| /occupied_cells_vis_array | visualization_msgs/MarkerArray | 建图发布 | 占用体素可视化 |
 
 ## 参数配置
 
-参数位于 config/params.yaml，由 main.launch 载入。
+参数位于 `config/params.yaml`，由 `main.launch` 载入。
+**注意：用 `rosrun` 单独跑节点不会加载这个文件，参数会退回默认值。**
 
-uav_env_check（环境自检节点）：
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| check_duration | 5.0 | 自检运行时长（秒） |
-| clock_timeout | 30.0 | 等待 /clock 的超时时间（秒） |
-| service_timeout | 30.0 | 等待 Gazebo 服务的超时时间（秒） |
-
-uav_controller（位置控制器）：
+`uav_env_check`（环境自检）：
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| mass | 1.0 | 机体质量（kg），需与 quadrotor.sdf 一致 |
-| kp | 4.0 | 位置环比例增益 |
-| kd | 4.0 | 速度环阻尼增益 |
-| gravity | 9.81 | 重力加速度，用于重力补偿 |
-| max_force | 40.0 | 外力限幅（N） |
-| control_rate | 50.0 | 控制频率（Hz） |
-| goal_x / goal_y / goal_z | 0 / 0 / 2.0 | 初始目标点 |
+| host / port | 192.168.198.1 / 41451 | 模拟器地址，需与 `airsim_bridge` 一致 |
+| vehicle_name / lidar_name | Drone1 / LidarSensor1 | 需与模拟器的 `settings.json` 一致 |
+| cloud_topic / world_frame / body_frame | /cloud_in / world / base_link | 被检查的话题与坐标系 |
+| check_duration | 10.0 | 自检运行时长（秒） |
+| cloud_timeout / tf_timeout | 20.0 / 10.0 | 等待点云 / TF 的超时（秒） |
+
+`airsim_bridge`（桥接节点）：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| host / port | 192.168.198.1 / 41451 | 宿主机在 VMnet8 上的地址，**不是 127.0.0.1** |
+| vehicle_name / lidar_name | Drone1 / LidarSensor1 | 载具与雷达名 |
+| world_frame / body_frame / lidar_frame | world / base_link / lidar_link | 帧名 |
+| lidar_x / lidar_y / lidar_z | 0 / 0 / -1.0 | 雷达在机体系（NED）下的安装位置 |
+| world_z_offset | 24.94 | 世界系 z 校准（见下） |
+| state_rate / cloud_rate | 20.0 / 10.0 | 位姿与点云的发布频率（Hz） |
+| goal_velocity | 3.0 | 收到目标点后的飞行速度（m/s） |
+| auto_takeoff | true | 首次收到目标点时是否自动解锁起飞 |
+
+> **`world_z_offset` 是干什么的**：AirSim 的 NED 原点不一定在地面。
+> 本机场景实测载具在 NED `z = +24.94`（即原点下方约 25 m），
+> 加这个常量偏移把地图挪到 RViz 网格附近，方便观察。纯平移，不影响寻路结果。
+
+`pointcloud_to_octomap`（建图节点）：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| cloud_topic / world_frame / sensor_frame | /cloud_in / world / lidar_link | 输入话题与坐标系 |
+| resolution | 0.3 | 八叉树叶节点分辨率（m），**最关键的一个参数** |
+| max_range / min_range | 30.0 / 0.5 | 射线量程范围（m） |
+| point_stride | 2 | 抽稀：每隔 N 个点取一个做射线投射 |
+| prob_hit / prob_miss | 0.7 / 0.4 | 占用概率模型 |
+| clamp_min / clamp_max | 0.12 / 0.97 | 占用概率上下限 |
+| publish_rate | 1.0 | 地图与可视化发布频率（Hz） |
+| color_min_z / color_max_z | 0.0 / 25.0 | 体素着色的高度范围（m） |
+| max_markers | 20000 | 单帧可视化的最大体素个数 |
+
+> **性能提示**：AirSim 一帧约有一万个点，每点一条射线，射线长度除以分辨率就是
+> 要更新的体素数量。逐点投射在虚拟机上跟不上，所以默认抽稀 2 倍、分辨率取 0.3 m、
+> 量程收到 30 m。机器的性能富裕时可以把 `point_stride` 调回 1、`resolution` 调到 0.2。
 
 ## 目录结构
 
     octree_uav_3d_pathfinding/
-      package.xml                  包声明与依赖
-      CMakeLists.txt               编译规则
-      README.md                    本文件
-      launch/main.launch           模块统一入口
-      scripts/main.py              环境与链路自检节点
-      scripts/uav_controller.py    质点四旋翼位置控制器
-      config/params.yaml           参数配置
-      models/quadrotor.sdf         质点四旋翼模型（含 3D 激光雷达）
-      models/obstacle_course.world 障碍场景
-      rviz/default.rviz            RViz 可视化预设
-      docs/                        运行效果图
+      package.xml                      包声明与依赖
+      CMakeLists.txt                   编译规则
+      README.md                        本文件
+      launch/main.launch               模块统一入口
+      src/pointcloud_to_octomap.cpp    点云转八叉树占用地图节点（C++）
+      scripts/main.py                  主入口与环境链路自检
+      scripts/airsim_bridge.py         AirSim → ROS 桥接节点
+      scripts/mock_cloud_publisher.py  离线点云模拟器（排障用）
+      config/params.yaml               参数配置
+      rviz/default.rviz                RViz 可视化预设
+      docs/                            运行效果图
+
+> 模拟器的模型与场景（`models/`）不在本包内 —— 载具、传感器与场景
+> 全部由宿主上的 AirSim 提供，通过 `settings.json` 配置。
 
 ## 常见问题
 
 | 现象 | 原因与处理 |
 |---|---|
-| Unable to communicate with master | ROS 主节点未启动，用 roslaunch 会自动启动 |
-| RLException: not a launch file name | 未载入本工作空间，执行 source ~/uav_ws/devel/setup.bash |
-| /clock 等待超时 | Gazebo 未启动，或直接运行 gzserver 未拉起 ROS 主节点 |
-| catkin_make: command not found | 未载入 ROS 环境，执行 source /opt/ros/noetic/setup.bash |
-| 飞行器持续下坠 | 位置控制器未启动，检查 control 参数与 /ground_truth/odom 是否有数据 |
+| 自检报"无法连接 AirSim" | ①宿主模拟器没启动；②防火墙没放行 41451；③`host` 写成了 `127.0.0.1`（应为宿主机 VMnet8 地址） |
+| 连不上、但端口测试返回 11 | **11 是"超时/丢包"，不是"端口关闭"**（那会是 111）。查宿主防火墙的入站规则，尤其有没有 Block 规则压着 Allow |
+| 自检报"/cloud_in 等待超时" | 桥接节点没起来，或 AirSim 没返回激光数据。先看桥接节点自己的日志 |
+| `ModuleNotFoundError: msgpackrpc` | 安装顺序错了：先 `numpy`，再 `msgpack-rpc-python`，最后 `airsim` |
+| `catkin_make` 找不到 octomap | `sudo apt install liboctomap-dev` |
+| RViz 里点云/体素"看不见"，但状态是 Ok | ①相机太远（几十米外看 0.3 m 的体素只有几个像素）；②**`Style` 必须是 `Squares`，`Points` 走 OpenGL 的 `GL_POINTS`，虚拟机显卡驱动会把点大小钳到 1 像素**。Status Ok 只说明消息收到了，不代表画出来了 |
+| 体素全是同一个颜色 | `color_min_z` / `color_max_z` 与实际高度范围不匹配 |
+| 建图节点 CPU 跑满、日志卡顿 | `point_stride` 调大、`max_range` 调小 |
+| 改了参数但不生效 | 用 `rosrun` 跑不会加载 `params.yaml`，改用 `roslaunch` |
 
 ## 后续计划
 
 | 提交 | 内容 | 状态 |
 |---|---|---|
 | 1 | 模块骨架、launch 入口、环境自检 | 已完成 |
-| 2 | 质点四旋翼模型、3D 激光雷达传感器 | 已完成 |
-| 3 | 位置控制器（受控悬停与飞行） | 已完成 |
-| 4 | 点云转八叉树占用地图 | 进行中 |
-| 5 | 八叉树上的 A* 全局寻路 | 待开发 |
-| 6 | 安全裕度与路径平滑 | 待开发 |
-| 7 | 路径跟踪与闭环飞行 | 待开发 |
+| 2 | 飞行器与传感器（**已从 Gazebo 迁移到 AirSim**） | 已完成 |
+| 3 | 点云转八叉树占用地图 | 已完成 |
+| 4 | 八叉树上的 A* 全局寻路 | 待开发 |
+| 5 | 安全裕度与路径平滑 | 待开发 |
+| 6 | 路径跟踪与闭环飞行 | 待开发 |
 
 ## 参考
 
-- OctoMap 官网：https://octomap.github.io/
+- [AirSim 激光雷达文档](https://microsoft.github.io/AirSim/lidar/)
+- [AirSim ROS 封装](https://microsoft.github.io/AirSim/airsim_ros_pkgs/)
+- [OpenHUTB 低空模拟器文档](https://openhutb.github.io/air_doc/)
+- [OctoMap 官网](https://octomap.github.io/)
 - Hornung et al., OctoMap: An Efficient Probabilistic 3D Mapping Framework Based on Octrees, Autonomous Robots, 2013
