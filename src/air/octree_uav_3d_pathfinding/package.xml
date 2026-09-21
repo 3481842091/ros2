@@ -23,14 +23,20 @@
   <depend>geometry_msgs</depend>
   <depend>tf</depend>
   <depend>tf2_ros</depend>
+  <depend>octomap</depend>
   <depend>octomap_msgs</depend>
   <depend>octomap_ros</depend>
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
+  <!-- 点云建图节点的占用体素可视化需要 -->
+  <depend>visualization_msgs</depend>
 
-  <exec_depend>gazebo_ros</exec_depend>
-  <exec_depend>gazebo_plugins</exec_depend>
   <exec_depend>rviz</exec_depend>
+
+  <!-- 说明：模拟器（AirSim，随 OpenHUTB 发行版提供）跑在宿主 Windows 上，
+       不属于本包的 ROS 依赖。客户机侧需要 Python 客户端，用 pip 安装：
+           pip3 install numpy msgpack-rpc-python airsim
+       两者之间走 AirSim 的 RPC 端口（默认 41451），不是 ROS 话题。 -->
 
   <export>
   </export>
