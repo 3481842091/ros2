@@ -2,6 +2,11 @@
 #
 # 本文件由 launch/main.launch 通过 <rosparam command="load"> 载入。
 # 参数按节点名分组，节点内可通过 ~参数名 读取。
+#
+# ⚠️ 换机器必须改的两项：
+#     · host —— 你自己宿主机的 VMnet8 地址（下面所有分组里的 host 都要改）
+#              查法：在客户机里执行 ip route | grep default，看默认网关所在网段
+#     · vehicle_name / lidar_name —— 要与你自己模拟器上的 settings.json 一致
 
 uav_env_check:
   # 与 airsim_bridge 指向同一台模拟器，否则自检结果没有意义
@@ -26,7 +31,8 @@ uav_env_check:
 # 注意：模拟器跑在宿主 Windows 上（OpenHUTB，AirSim 1.8.1），
 #       本节点跑在客户机 Ubuntu 里，两者走 VMnet8 网络的 RPC 41451。
 airsim_bridge:
-  # 宿主机在 VMnet8 上的地址（不是 127.0.0.1）
+  # 宿主机在 VMnet8 上的地址。
+  # 192.168.198.1 是本项目实测环境里的值，**每台机器可能不同**，请改成你自己的。
   host: 192.168.198.1
   # AirSim RPC 端口
   port: 41451

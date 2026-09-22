@@ -42,8 +42,7 @@ Windows/Unreal 程序，无法装进虚拟机。这一点决定了整个环境�
 
 ![](../../img/air/octree_uav_3d_pathfinding/01_vm_spec.png)
 
-> **注意**：模拟器本身不跑在虚拟机里，所以虚拟机的显卡性能只影响 RViz，
-> 不影响仿真质量 —— 这一点比"虚拟机里跑 Gazebo"的方案轻松得多。
+> **注意**：模拟器本身不跑在虚拟机里，所以虚拟机的显卡性能只影响 RViz，不影响仿真质量。
 
 ### 2.2 虚拟网络与登录
 
@@ -57,13 +56,16 @@ ip -4 -br addr
 
 ![](../../img/air/octree_uav_3d_pathfinding/02_ip_addr.png)
 
-**记住宿主机的 VMnet8 地址**（本机为 `192.168.198.1`）—— 后面连模拟器要用它，
-不能用 `127.0.0.1`：
+**记下你自己宿主机的 VMnet8 地址** —— 后面连模拟器要用它，**不能用 `127.0.0.1`**
+（在客户机里 `127.0.0.1` 指向客户机自己，不是宿主）：
 
 ```shell
-# 查看默认网关（通常就是宿主的 VMnet8 地址所在网段）
+# 查看默认网关，宿主的 VMnet8 地址就在这个网段里
 ip route | grep default
 ```
+
+> 本文档实测环境中宿主是 `192.168.198.1`，但这是 VMware 的网段分配结果，
+> **每台机器可能不同**。下文出现的 `192.168.198.1` 请一律替换为你自己查到的地址。
 
 ---
 
@@ -164,11 +166,30 @@ AirSim 的架构是"**一个 RPC 服务端 + 任意多个客户端**"，所以�
 
 ### 5.2 启动模拟器（宿主侧）
 
-在 Windows 宿主上，**工作目录必须是模拟器包根**（它要读同目录的 `settings.json`）：
+模拟器是解压即用的绿色发行版，**解压到哪个目录都可以**，但有一个硬性要求：
+**必须在模拟器的安装目录里启动它** —— 因为模拟器要读**同目录**下的 `settings.json`，
+载具与激光雷达的配置就写在那里；从别处启动它会找不到配置文件，也就不会有激光雷达。
+
+在 Windows 上进入该目录后运行 `CarlaUE4.exe`（或在资源管理器里直接双击它）：
 
 ```bat
-D:\应用\hutb\CarlaUE4.exe
+cd <模拟器安装目录>
+CarlaUE4.exe
 ```
+
+安装目录里应该能看到这几项，可以用来自查：
+
+```text
+<模拟器安装目录>\
+    CarlaUE4.exe      ← 启动程序
+    settings.json     ← AirSim 配置（载具、激光雷达）
+    CarlaUE4\         ← 程序资源
+    Engine\           ← 引擎
+```
+
+> **本文档不写死具体路径**，因为每个人把发行版解压到哪里都不一样（放在哪个盘、
+> 哪个目录都可以，不必和本文一致）。请以你自己的安装位置为准 ——
+> 只要那个目录里有上面这几项就对了。
 
 首次启动、以及第一次加载城市地图时，画面可能要等 30~60 秒才逐渐渲染出来，这是正常的。
 启动完成后应能看到城市场景：
@@ -226,6 +247,15 @@ pip3 install airsim
 
 ### 5.5 验证连通性（客户机侧）
 
+> **⚠️ 先确认前置条件：模拟器的 `settings.json` 已经配好。**
+> 本节的测试用到载具名 `Drone1` 与雷达名 `LidarSensor1`。
+> 如果 `settings.json` 还没按 [AirSim 载具与位置控制](./flight_control.md) 第 2 节配好，
+> **第 2 步会直接报错**：`listVehicles()` 返回的是 `['SimpleFlight']` 这类默认名，
+> 紧接着 `getLidarData(lidar_name='LidarSensor1')` 就会抛 `RPCError`。
+> 请先配好再往下测。
+
+**第 1 步：测端口通不通**
+
 ```shell
 # 0 = 通
 python3 -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex(('192.168.198.1',41451)))"
@@ -235,11 +265,11 @@ python3 -c "import socket;s=socket.socket();s.settimeout(2);print(s.connect_ex((
 
 | 返回值 | 含义 | 处理 |
 |---|---|---|
-| **0** | 连通 | 继续下一步 |
+| **0** | 连通 | 继续第 2 步 |
 | **11** | **连接超时 / 包被丢弃** | 是**防火墙**问题，回到 5.3 |
 | **111** | **连接被拒绝** | 端口没人监听，模拟器没起来或没进 AirSim 模式 |
 
-进一步确认能取到激光数据：
+**第 2 步：测能不能取到激光数据**
 
 ```shell
 python3 -c "
@@ -251,10 +281,10 @@ print('lidar points:', len(d.point_cloud)//3)
 "
 ```
 
-输出 `RPC OK ['Drone1']` 与一个正的点数（本机实测约 9700）即表示链路完全打通。
+**期望输出**：`RPC OK ['Drone1']`，以及一个正的点数（本项目实测约 9700）。
 
-> 载具与激光雷达的详细配置（`settings.json`）见
-> [AirSim 载具与位置控制](./flight_control.md) 第 2 节。
+**如果载具列表不是 `['Drone1']`**，说明载具名对不上 —— 回到[第 2 节](#52-启动模拟器宿主侧)
+核对：`settings.json` 是否放在**模拟器安装目录**下、里面的载具名与雷达名是否写对了。
 
 ---
 
@@ -280,14 +310,13 @@ cd ~/uav_ws && catkin_make
 source devel/setup.bash
 ```
 
-编译日志中出现以下内容即为成功：
+编译成功时，日志里会先列出工作空间中的包（`-- ~~ traversing 1 packages`），
+最后以 `Built target` 结束 —— 后者出现即表示编译完成：
 
 ```
--- ~~  traversing 1 packages in topological order:
--- ~~  - octree_uav_3d_pathfinding
--- Configuring done
--- Generating done
-#### Running command: "make -j6 -l6" in "/home/user/uav_ws/build"
+[ 50%] Building CXX object octree_uav_3d_pathfinding/CMakeFiles/pointcloud_to_octomap.dir/src/pointcloud_to_octomap.cpp.o
+[100%] Linking CXX executable /home/user/uav_ws/devel/lib/octree_uav_3d_pathfinding/pointcloud_to_octomap
+[100%] Built target pointcloud_to_octomap
 ```
 
 ![](../../img/air/octree_uav_3d_pathfinding/10_catkin_workspace.png)
@@ -303,6 +332,19 @@ source devel/setup.bash
 ## 7. 编译与运行验证
 
 环境就绪后，编译并运行本模块的主入口，即可一次验证**模拟器层**与 **ROS 层**的整条链路。
+
+> **⚠️ 运行前必须先改一个参数**：`config/params.yaml` 里的 `host`。
+> 它默认写的是本项目实测环境的地址，**每台机器都不一样**，不改就会连不上模拟器
+> （表现是自检第 1 项报"无法连接 AirSim"）。
+>
+> ```shell
+> # 1) 先查你自己宿主机的 VMnet8 地址（见第 2.2 节）
+> ip route | grep default
+>
+> # 2) 再改 config/params.yaml，两组里的 host 都要改：
+> #      uav_env_check.host
+> #      airsim_bridge.host
+> ```
 
 ```shell
 # 载入工作空间环境

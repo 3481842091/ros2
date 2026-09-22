@@ -47,9 +47,13 @@
 
 ### 前置条件：先在宿主上启动模拟器
 
-在 Windows 宿主上，**工作目录必须是模拟器包根**（它要读同目录的 `settings.json`）：
+进入模拟器的安装目录运行 `CarlaUE4.exe`（安装位置因人而异，本文不写死具体路径）：
 
-    D:\应用\hutb\CarlaUE4.exe
+    cd <模拟器安装目录>
+    CarlaUE4.exe
+
+**必须在安装目录里启动** —— 它要读同目录的 `settings.json`（载具与激光雷达的配置）。
+该目录下应能看到 `CarlaUE4.exe`、`settings.json`、`CarlaUE4\`、`Engine\` 这几项。
 
 启动后等 30~60 秒让场景加载完，确认 AirSim 的 RPC 端口已经监听：
 
@@ -173,9 +177,9 @@ AirSim 接进 ROS 之后，RViz 里可以看到激光点云，以及桥接节点
 
 | 层级 | AirSim | ROS | 转换 |
 |---|---|---|---|
-| 世界系 | NED（北-东-地） | ENU（东-北-天） | `(e, n, u) = (y, x, -z)` |
-| 机体系 | FRD（前-右-下） | FLU（前-左-上） | `(x, y, z) = (x, -y, -z)` |
-| 姿态 | 四元数（NED） | 四元数（ENU） | 要按基变换复合：`q_ros = q_Cw ⊗ q_ned ⊗ q_Dx` |
+| 世界系 | NED（北-东-地） | ENU（东-北-天） | $(e, n, u) = (y, x, -z)$ |
+| 机体系 | FRD（前-右-下） | FLU（前-左-上） | $(x, y, z) = (x, -y, -z)$ |
+| 姿态 | 四元数（NED） | 四元数（ENU） | 按基变换复合：$q_{ros} = q_{Cw} \otimes q_{ned} \otimes q_{Dx}$ |
 
 点云的坐标系由模拟器 `settings.json` 里的 `DataFrame` 决定 —— 本模块用
 **`SensorLocalFrame`**（点云在雷达本体系下），这样下游建图节点可以直接套用
@@ -198,6 +202,13 @@ AirSim 接进 ROS 之后，RViz 里可以看到激光点云，以及桥接节点
 参数位于 `config/params.yaml`，由 `main.launch` 载入。
 **注意：用 `rosrun` 单独跑节点不会加载这个文件，参数会退回默认值。**
 
+> ⚠️ **换机器必须改两项**
+>
+> * `host` —— 改成**你自己宿主机的 VMnet8 地址**。查法：在客户机里执行
+>   `ip route | grep default`，宿主的地址就在默认网关那个网段里。
+>   本文出现的 `192.168.198.1` 是本项目实测环境的值，**每台机器可能不同**。
+> * `vehicle_name` / `lidar_name` —— 要与你自己模拟器 `settings.json` 里的名字一致。
+
 `uav_env_check`（环境自检）：
 
 | 参数 | 默认值 | 说明 |
@@ -212,7 +223,7 @@ AirSim 接进 ROS 之后，RViz 里可以看到激光点云，以及桥接节点
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| host / port | 192.168.198.1 / 41451 | 宿主机在 VMnet8 上的地址，**不是 127.0.0.1** |
+| host / port | 192.168.198.1 / 41451 | 宿主机的 VMnet8 地址，**不是 `127.0.0.1`**，每台机器不同 |
 | vehicle_name / lidar_name | Drone1 / LidarSensor1 | 载具与雷达名 |
 | world_frame / body_frame / lidar_frame | world / base_link / lidar_link | 帧名 |
 | lidar_x / lidar_y / lidar_z | 0 / 0 / -1.0 | 雷达在机体系（NED）下的安装位置 |
