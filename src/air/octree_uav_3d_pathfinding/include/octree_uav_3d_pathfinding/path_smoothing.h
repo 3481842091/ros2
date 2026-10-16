@@ -89,6 +89,16 @@ struct SmoothStats {
   std::size_t degenerate_curvatures = 0;  ///< 命中除零守卫的次数（**风险项 ④** 的直接证据）
 
   double length = 0.0;               ///< 平滑后路径长度（m）
+
+  /// 实际用于碰撞检测的采样步长（m）。调用方可据此核对"我设的值有没有被改"。
+  double sample_step_used = 0.0;
+
+  /// 采样步长是否被限幅过。
+  ///
+  /// 为什么必须有这个字段：步长 ≥ 分辨率时 `segmentFree` 会跳过中间体素，
+  /// 捷径化与样条复检都会漏检障碍 —— 安全保证被破坏。所以 `smoothPath`
+  /// 会把它压到 resolution/2 之下；**压过就要留痕**，不能静默改掉用户参数。
+  bool sample_step_clamped = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -397,15 +407,27 @@ inline bool smoothPath(const std::vector<octomap::point3d>& input,
     return false;
   }
 
-  // 采样步长：必须小于分辨率，否则线段会从体素对角缝里穿过去。
-  // 这是安全关键项，所以默认取 resolution/2。
-  const double step = (opt.sample_step > 0.0) ? opt.sample_step : (resolution / 2.0);
+  // 采样步长：**必须 < 分辨率**，否则 segmentFree 只在线段两端与少量中间点问
+  // free 谓词，会整块跳过中间体素 —— 又细又薄的障碍会被漏检，捷径化与样条复检
+  // 双双失效，本模块的安全保证就被破坏。单元测试里有一条反例断言证明这一点
+  // （步长 1.0 m 会钻过 0.2 m 厚的墙）。
+  //
+  // 所以这里**强制** 0 < step < resolution：
+  //   · sample_step <= 0        → 取 resolution/2（默认行为）
+  //   · sample_step >= resolution → 限幅到 resolution/2，并在 stats 里留痕
+  double step = (opt.sample_step > 0.0) ? opt.sample_step : (resolution / 2.0);
+  if (resolution > 0.0 && step >= resolution) {
+    // 不能静默改用户参数 —— 记下来，调用方要把它打到日志里
+    stats.sample_step_clamped = true;
+    step = resolution / 2.0;
+  }
   if (step <= 0.0) {
     stats.note = "invalid sample step (need resolution > 0 or explicit step)";
     stats.output_points = out.size();
     stats.length = pathLength(out);
     return false;
   }
+  stats.sample_step_used = step;
 
   // ---- 第 1 步：捷径化 ----
   std::vector<octomap::point3d> sh = input;

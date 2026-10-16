@@ -346,6 +346,14 @@ private:
                  sstats.spline_rejected ? " [REJECTED by recheck]" : "",
                  sstats.spline_ms, sstats.recheck_ms,
                  sstats.note.empty() ? "" : " | note: ", sstats.note.c_str());
+
+        // 采样步长是安全关键项：步长 ≥ 分辨率会让碰撞检测漏检障碍。
+        // smoothPath 已强制限幅，这里把"参数被改过"明确告诉用户。
+        if (sstats.sample_step_clamped) {
+          ROS_WARN("smoothing_sample_step=%.3f m >= resolution, clamped to %.3f m "
+                   "(a step >= resolution skips voxels and voids the safety check)",
+                   smooth_opt_.sample_step, sstats.sample_step_used);
+        }
       }
       publishSmoothPath(smooth);
     }
