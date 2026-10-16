@@ -25,6 +25,7 @@
 
 #include <octomap/octomap.h>
 
+#include "octree_uav_3d_pathfinding/astar.h"
 #include "octree_uav_3d_pathfinding/map_inflation.h"
 #include "octree_uav_3d_pathfinding/path_smoothing.h"
 
@@ -48,6 +49,7 @@
 // ---------------------------------------------------------------------------
 using octree_uav_3d_pathfinding::InflationStats;
 using octree_uav_3d_pathfinding::MapInflation;
+using octree_uav_3d_pathfinding::OctreeAStar;
 using octree_uav_3d_pathfinding::PathMetrics;
 using octree_uav_3d_pathfinding::SmoothOptions;
 using octree_uav_3d_pathfinding::SmoothStats;
@@ -121,10 +123,27 @@ octomap::point3d voxelCenter(const octomap::OcTree& tree,
 }
 
 // 由坐标定出体素中心，再标为占用 —— 断言时用同一个中心，避免取整歧义
+//
+// 注意 Octree::updateNode(key, value) 的第二个参数是 **log-odds 值**：
+// 传 `true`（= 1.0）超过默认占用阈值 0.12，所以这是"标为占用"。
+// 想标"已知空闲"不能用这个函数，要用下面的 freeRay()（射线投射）。
 void markVoxel(octomap::OcTree& tree, const octomap::point3d& p) {
   const octomap::point3d c = voxelCenter(tree, p);
   octomap::OcTreeKey key;
   if (tree.coordToKeyChecked(c, key)) tree.updateNode(key, true);
+}
+
+// 用射线投射把 origin → endpoint 这条射线上的体素标成"已知空闲"，
+// 端点标成占用 —— 与真实建图一样（空闲空间就是这么来的）。
+//
+// 为什么需要它：`updateNode(key, true)` 只能标占用；而"已知空闲"的叶节点
+// 必须由射线投射产生（其 log-odds 低于空闲阈值）。测试要区分
+// "已知空闲"与"未知空间"，就必须用这条路径。
+void freeRay(octomap::OcTree& tree, const octomap::point3d& origin,
+             const octomap::point3d& endpoint) {
+  octomap::Pointcloud cloud;
+  cloud.push_back(endpoint);
+  tree.insertPointCloud(cloud, origin);
 }
 
 // 把一个盒子里（按分辨率取样）的体素全部标为占用
@@ -260,6 +279,82 @@ void testOversizedSampleStepIsClamped() {
         "step exactly equal to resolution is also clamped");
   check(stats3.sample_step_used < resolution,
         "step equal to resolution is reduced below it");
+}
+
+// ===========================================================================
+// 用例 11：r = 0 + 启用平滑 时，碰撞谓词仍必须查原树
+//
+// 审阅指出的缺陷：`OctreeAStar::traversable()` 曾写成
+//     if (blocked_ == NULL) return true;
+// 而 blocked_ 只在 inflation_radius > 0 时才赋值 —— 于是 r = 0 时对**任何坐标**
+// 都返回 true。`smoothing:=true inflation_radius:=0` 是合法配置，此时
+// segmentFree() 认为任何线段都无碰撞，捷径化/样条会把安全的 A* 折线取直、
+// 直接穿过障碍。
+//
+// 本用例把那种配置做出来：一棵有障碍的原树 + 默认 Params（r = 0），
+// 断言穿过障碍的线段被拒绝。
+// ===========================================================================
+void testTraversableChecksRawTreeAtZeroRadius() {
+  std::printf("\n[case 11] r=0 + smoothing: collision predicate must still "
+              "consult the raw tree\n");
+
+  octomap::OcTree tree(0.3);
+  const octomap::point3d obstacle = voxelCenter(tree, P(2.0, 2.0, 0.0));
+
+  // ① 先打 4 条平行射线（沿 x 方向、y≈2、z 取 ±0.05/±0.15），
+  //    终点都用**未被占据**的体素中心 —— 射线扫过的体素成为**已知空闲**，
+  //    覆盖路径要走的 x∈[-2,3]、y≈2、z≈0 一带。
+  //    其中一条会穿过障碍所在体素，把它短暂标成空闲。
+  const double ray_z[4] = {-0.15, -0.05, 0.05, 0.15};
+  for (int i = 0; i < 4; ++i) {
+    freeRay(tree, octomap::point3d(10.0, 2.0, ray_z[i]),
+            octomap::point3d(-9.0, 2.0, ray_z[i]));
+  }
+  // ② 再标障碍（占用标记覆盖刚才的射线结果）——
+  //    与真实建图一致：同一个体素被占用命中后即判定为障碍。
+  markVoxel(tree, obstacle);
+
+  OctreeAStar astar(tree, OctreeAStar::Params());   // inflation_radius = 0
+
+  check(!astar.traversable(obstacle),
+        "an occupied point is NOT traversable even at r = 0");
+
+  // 射线投射扫过的区域：已知空闲，必须可通行
+  const octomap::point3d known_free = voxelCenter(tree, P(-2.0, 2.0, 0.0));
+  check(astar.traversable(known_free),
+        "a known free voxel IS traversable at r = 0");
+
+  // 地图外的点：原树里没有节点 → 未知 → 当障碍
+  check(!astar.traversable(P(500.0, 500.0, 500.0)),
+        "an unknown (off-map) point is NOT traversable");
+
+  // 这一条是本次修复的核心：两个端点都是**已知空闲**，唯一障碍在它们之间，
+  // 所以"不能合并成一条直段"只可能是因为线段穿过了障碍。
+  std::vector<octomap::point3d> path;
+  path.push_back(known_free);
+  path.push_back(obstacle);
+  path.push_back(voxelCenter(tree, P(6.0, 2.0, 0.0)));   // 也是已知空闲
+
+  SmoothOptions opt;
+  opt.shortcut = true;
+  opt.spline = false;
+
+  std::vector<octomap::point3d> out;
+  SmoothStats stats;
+  smoothPath(path, opt, [&astar](const octomap::point3d& p) {
+               return astar.traversable(p);
+             },
+             0.3, out, stats);
+
+  check(out.size() == path.size(),
+        "shortcut must NOT merge across the obstacle at r = 0 "
+        "(a straight segment would pass through it)");
+  check(stats.output_points == out.size(), "stats.output_points matches output size");
+
+  // 反向确认：路径中段那个点是障碍，本身不可通行 ——
+  // 所以"不合并"确实是碰撞谓词拦下来的。
+  check(!astar.traversable(obstacle),
+        "sanity: the middle waypoint (the obstacle) is not traversable");
 }
 
 // ===========================================================================
@@ -610,6 +705,7 @@ int main() {
   testShortcutRejectsWall();
   testShortcutSampleStepAliasing();
   testOversizedSampleStepIsClamped();
+  testTraversableChecksRawTreeAtZeroRadius();
   testCurvatureGuards();
   testSplineAcceptedOnSmoothArc();
   testSplineRejectedWhenCurveHitsObstacle();
