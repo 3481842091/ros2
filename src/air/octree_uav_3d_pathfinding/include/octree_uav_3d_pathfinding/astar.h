@@ -161,14 +161,44 @@ class OctreeAStar {
     }
   }
 
-  /// 供测试与调用方查询：某个位置当前是否可通行（即"未落在安全裕度内"）。
+  /// 搜索图的一个节点：叶标识 + 几何。自带 occupied 标记，避免到处传节点指针。
   ///
-  /// r = 0 时恒为 true —— 与 P4 完全一致。P5 的平滑层用它做碰撞检测，
-  /// 这样"规划"与"平滑"共享**同一套安全语义**，不会出现"规划躲开了、
-  /// 平滑又把路径拉回去"的矛盾。
+  /// 声明在类体靠前处：`traversable()` 要按"原树占用/未知"判定任意点，而成员
+  /// 函数体内引用**后面才声明的嵌套类型**会被解析成别的类型（编译错误），
+  /// 所以提前定义，供 `findLeaf()` 与 `traversable()` 共用。
+  struct Node {
+    NodeId id;
+    octomap::point3d center;
+    double size;
+    bool occupied;
+
+    Node() : size(0.0), occupied(true) {}
+    Node(const NodeId& i, const octomap::point3d& c, double s, bool occ)
+        : id(i), center(c), size(s), occupied(occ) {}
+  };
+
+  /// 供测试与调用方查询：某个位置当前是否可通行。
+  ///
+  /// 语义 = **原树的占用/未知判定** ∧ **叠加膨胀阻塞**（膨胀关闭时后一项恒真）。
+  ///
+  /// ⚠️ 这里曾经写成 `if (blocked_ == NULL) return true;` —— 那是错的：
+  /// `blocked_` 只在 `inflation_radius > 0` 时才被赋值，于是 **r = 0 时对任何坐标
+  /// 都返回 true**。A\* 内部不受影响（它自己在 expand 里先查叶子的 occupied 标志），
+  /// 但本函数是**平滑阶段唯一的碰撞谓词** —— 配置
+  /// `smoothing:=true inflation_radius:=0` 是合法的，那时 `segmentFree()` 会认为
+  /// 任何线段都无碰撞，捷径化或样条可能把安全的 A\* 折线直接取直、穿过障碍。
+  ///
+  /// 现在两层判定始终生效，与 A\* 扩展邻居时的口径一致
+  /// （见 probeDirection()：先 `findLeaf` 成功且 `!occupied`，再叠加 `blocked_`）。
   bool traversable(const octomap::point3d& p) const {
-    if (blocked_ == NULL) return true;
-    return !(*blocked_)(p);
+    // ① 原树：未知空间一律当障碍 —— 与 A\* 的搜图范围保持一致
+    Node leaf;
+    if (!findLeaf(p, leaf)) return false;
+    // ② 原树：占用叶不可通行
+    if (leaf.occupied) return false;
+    // ③ 膨胀层（r = 0 时 blocked_ 为空，这一层自动跳过）
+    if (blocked_ != NULL && (*blocked_)(p)) return false;
+    return true;
   }
 
   /// 供 ROS 节点读取膨胀层的规模/耗时统计（叶子数、内存、建树时间）。
@@ -561,18 +591,6 @@ class OctreeAStar {
   }
 
  private:
-  /// 搜索图的一个节点：叶标识 + 几何。自带 occupied 标记，避免到处传节点指针。
-  struct Node {
-    NodeId id;
-    octomap::point3d center;
-    double size;
-    bool occupied;
-
-    Node() : size(0.0), occupied(true) {}
-    Node(const NodeId& i, const octomap::point3d& c, double s, bool occ)
-        : id(i), center(c), size(s), occupied(occ) {}
-  };
-
   struct OpenItem {
     double f;
     Node node;
