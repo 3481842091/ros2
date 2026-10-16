@@ -202,6 +202,67 @@ void testShortcutSampleStepAliasing() {
 }
 
 // ===========================================================================
+// 用例 10：显式超大采样步长必须被强制限幅
+//
+// 审阅指出的风险：`smoothing_sample_step` 若被设成 ≥ 分辨率，`segmentFree`
+// 会整块跳过中间体素，捷径化与样条复检双双漏检障碍 —— 安全保证被破坏。
+// 文档与单测都把"步长 < 分辨率"写成硬约束，所以代码必须**强制**它，
+// 而不能只在默认值上成立。
+// ===========================================================================
+void testOversizedSampleStepIsClamped() {
+  std::printf("\n[case 10] oversized sample step is clamped, never used as-is\n");
+
+  std::vector<octomap::point3d> path;
+  path.push_back(P(0, 0, 0));
+  path.push_back(P(0.5, -1.0, 0));
+  path.push_back(P(1.0, 0, 0));
+
+  const double resolution = 0.3;
+
+  // 故意给一个远大于分辨率的步长
+  SmoothOptions opt;
+  opt.shortcut = true;
+  opt.spline = false;
+  opt.sample_step = 1.0;
+
+  std::vector<octomap::point3d> out;
+  SmoothStats stats;
+  smoothPath(path, opt, freeAlways, resolution, out, stats);
+
+  check(stats.sample_step_clamped,
+        "oversized explicit sample step is flagged as clamped");
+  check(stats.sample_step_used > 0.0 && stats.sample_step_used < resolution,
+        "step actually used is strictly below resolution");
+  checkNear(stats.sample_step_used, resolution / 2.0, 1e-12,
+            "clamped step equals resolution/2");
+
+  // 默认路径（未显式给步长）不应被标记为限幅
+  SmoothOptions def;
+  def.shortcut = true;
+  def.spline = false;
+  std::vector<octomap::point3d> out2;
+  SmoothStats stats2;
+  smoothPath(path, def, freeAlways, resolution, out2, stats2);
+  check(!stats2.sample_step_clamped,
+        "default (auto) step is not flagged as clamped");
+  checkNear(stats2.sample_step_used, resolution / 2.0, 1e-12,
+            "default step equals resolution/2");
+
+  // 恰好等于分辨率也要被限幅（边界条件：>= 就得拦）
+  SmoothOptions edge;
+  edge.shortcut = true;
+  edge.spline = false;
+  edge.sample_step = resolution;
+  std::vector<octomap::point3d> out3;
+  SmoothStats stats3;
+  smoothPath(path, edge, freeAlways, resolution, out3, stats3);
+  check(stats3.sample_step_clamped,
+        "step exactly equal to resolution is also clamped");
+  check(stats3.sample_step_used < resolution,
+        "step equal to resolution is reduced below it");
+}
+
+// ===========================================================================
 // 用例 9：曲率除零守卫（风险项 ④）
 // ===========================================================================
 void testCurvatureGuards() {
@@ -548,6 +609,7 @@ int main() {
 
   testShortcutRejectsWall();
   testShortcutSampleStepAliasing();
+  testOversizedSampleStepIsClamped();
   testCurvatureGuards();
   testSplineAcceptedOnSmoothArc();
   testSplineRejectedWhenCurveHitsObstacle();

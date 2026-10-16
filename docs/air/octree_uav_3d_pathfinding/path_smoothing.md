@@ -275,6 +275,9 @@ for i in 0..n-1:
 2. **采样步长必须小于分辨率**（默认 \(\text{resolution}/2\)）。
    否则线段会从两个占用体素的对角缝里穿过去。这是安全关键项，
    不是可以调大的性能参数（§7 有一条反例断言证明这一点）。
+   因此 `smoothPath` **强制** \(0 < \text{step} < \text{resolution}\)：
+   显式传入的值只要 ≥ 分辨率，就被限幅到 \(\text{resolution}/2\)，
+   并在 `SmoothStats` 里标记、由节点打 WARN —— **不静默改参数，也不放行**。
 3. **首尾两点保留**：它们是任务给定的起点与终点。
 
 ### 6.2 第二步：三次样条
@@ -322,13 +325,14 @@ $$
 ### 7.1 离线单元测试
 
 `tests/test_smoothing.cpp`，只依赖 octomap 与 STL，不需要 ROS 与模拟器。
-实测 **59 项检查全部通过**。
+实测 **66 项检查全部通过**。
 
 | 用例 | 验证内容 |
 |---|---|
 | **回归：\(r = 0\)** | `isBlocked()` 恒 false、间隙饱和、出界点行为与基线一致 |
 | 捷径化：穿墙 | 给一条绕过墙的折线，取直会穿墙，必须拒绝 |
 | 捷径化：采样步长 | **反例断言**：步长 1.0 m（> 墙厚 0.2 m）会钻过墙，证明步长是安全关键项 |
+| 采样步长：限幅 | 显式传入 1.0 m（≥ 分辨率 0.3）被压到 0.15；默认路径不触发；**恰好等于分辨率也拦** |
 | 曲率守卫 | 共线 / 重复点 → \(\kappa = 0\) 且不产生 NaN/inf；单位圆三点 → \(\kappa = 1.0\) |
 | 样条 | 无障碍时被采纳、加密路径、过两端点；发布路径的点与线段全部无碰撞 |
 | 膨胀：\(r = 0\) | 不建影子树、`isBlocked` 恒 false |
@@ -449,7 +453,7 @@ note: spline rejected by collision recheck; fell back to shortcut polyline
 | `smoothing` | `false` | 路径平滑总开关（默认关） |
 | `smoothing_shortcut` | `true` | 是否做捷径化 |
 | `smoothing_spline` | `true` | 是否做三次样条 |
-| `smoothing_sample_step` | `0.0` | 碰撞检测步长；0 = `resolution/2`（必须小于分辨率） |
+| `smoothing_sample_step` | `0.0` | 碰撞检测步长；0 = `resolution/2`。**≥ 分辨率会被强制限幅到 `resolution/2` 并打 WARN**（见 §6.1） |
 | `smoothing_samples_per_segment` | `8` | 样条每段采样点数 |
 | `smooth_path_topic` | `/uav/path_smooth` | 平滑后路径话题，与 `/uav/path` 并存便于对比 |
 | `metrics_log` | `true` | 打印路径长度 / 最大曲率 / 最小间隙 / 三段耗时 |
