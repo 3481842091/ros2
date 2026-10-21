@@ -122,6 +122,7 @@ nav:
         - 点云转八叉树占用地图: 'air/octree_uav_3d_pathfinding/occupancy_mapping.md'
         - 八叉树上的 A* 全局寻路: 'air/octree_uav_3d_pathfinding/astar_planning.md'
         - 安全裕度与路径平滑: 'air/octree_uav_3d_pathfinding/path_smoothing.md'
+        - 路径跟踪与闭环飞行: 'air/octree_uav_3d_pathfinding/path_following.md'
     - YOLO目标检测与八字轨迹控制: './air/openhutb_yolo_mlp_control.md'
     - 禁飞区检测: 'air/no_fly_zone_check/index.md'
     - AllocNet 四旋翼避障规划与键盘遥操作: './air/allocnet_teleop.md'
