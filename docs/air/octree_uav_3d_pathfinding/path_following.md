@@ -245,9 +245,9 @@ rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 7.5, y: -7.5, z: 2.0}"
 到达终点后节点会打印统计：
 
 ```
-follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.16 m flown=32.25 m
-        approach=0.30 m/0.10s | duration=10.75s | mean_speed=3.00 m/s | max_dev=1.25 m
-  corner cutting: flown is 13.2% shorter than the path
+follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
+        approach=0.00 m/0.00s | duration=10.65s | mean_speed=3.00 m/s | max_dev=0.41 m
+  corner cutting: flown is 4.7% shorter than the path
 ```
 
 | 字段 | 含义 |
@@ -308,52 +308,56 @@ follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.16 m flown=32.25 m
 不做碰撞判定。它替代的是桥接节点的位姿发布，不是飞行物理，所以这组数据只反映**跟踪逻辑**，
 不反映真实飞行品质。
 
-测量条件（下面两组数据都在这套条件下取得，复现时要一致）：
+测量条件：
 
 | 项 | 值 |
 |---|---|
-| 假载具起点 | `(-7.5, 7.5, 0.0)`（与路径起点对齐，`approach = 0`） |
+| 假载具起点 | `(-7.5, 7.5, 0.0)`（与路径起点对齐，接近段为 0） |
 | `inflation_radius` | 0.6 |
 | `smoothing` | true |
-| `lookahead` / `finish_tolerance` | 1.5 m / 0.5 m |
+| `smoothing_shortcut` / `smoothing_spline` | true / true |
+| `smoothing_samples_per_segment` | 8（默认） |
+| `lookahead` / `finish_tolerance` / `per_point_timeout` | 1.5 m / 0.5 m / 15 s |
 | `goal_velocity` | 3.0 m/s |
+| 启动命令 | `full_demo.launch bridge:=false check:=false body_frame:=lidar_link` |
 
-**起点必须对齐**：假载具默认起点是 `(0, 0, 0)`，此时它会先飞 22.5 m 到路径起点，
-那段"接近段"会让总耗时从 10.7 s 变成 13.3 s 左右。日志里 `approach` 字段单独给出这部分，
-`flown` 与 `duration` 都只算跟踪阶段。
+**起点必须对齐**：假载具默认起点是 `(0, 0, 0)`，此时它会先飞 22.5 m 到路径起点。
+日志里 `approach` 字段单独给出这段，`flown` 与 `duration` 都只算跟踪阶段。
 
-结果（跟踪 P5 平滑后的路径，一次运行）：
+#### 航点数取决于样条是否通过复检
 
-| 指标 | 值 |
-|---|---|
-| 路径点数 / 到达 / 跳过 | 10 / 10 / 0 |
-| 规划路径长度 `path` | 37.16 m |
-| 跟踪阶段飞行路程 `flown` | 32.25 m |
-| 接近段 `approach` | 0.30 m / 0.10 s |
-| 耗时 `duration` | 10.75 s |
-| 平均速度 | 3.00 m/s（= `goal_velocity`） |
-| 到路径的最大偏离 `max_dev` | 1.25 m（< `lookahead` 1.5 m） |
-| 切内角省下的路程 | 13.2%（`(path − flown) / path`） |
+同一套参数跑出来的结果分两种形态，差别不在跟踪逻辑，而在 P5 的平滑结果：
 
-**这组数据自洽**：`flown / duration = 3.00`，正好等于设定速度；
-`max_dev` 与"少走 13% 路程"是同一件事的两种度量 —— 前瞻跳点斜穿拐角，
-既让轨迹偏离路径，也缩短了实际路程。
+| 形态 | 平滑输出 | 航点数 | `max_dev` |
+|---|---|---|---|
+| 样条被接受 | `102 -> 73 pts` | 73（加密） | 0.41 m（很贴路径） |
+| 样条被复检拒绝 | `48 -> 11 pts`，退回捷径折线 | 10 ~ 11 | 1.25 ~ 1.26 m（切角多） |
 
-**重复运行会有小幅波动**：mock 传感器巡游时序会影响地图的自由叶数量
-（实测两次分别是 17945 与 19366），A\* 因此可能选出略不同的路径。
-多次运行的观测范围：
+样条是**拟合**，必须穿过每个航点，拐角处的航点贴在安全边界上时会被复检拒绝
+（见 P5 文档 §6.3）。它是否通过取决于地图几何的细节，因此**不同次的运行可能落在不同形态**。
 
-| 指标 | 范围 |
-|---|---|
-| 航点数 | 10 ~ 11 |
-| `path` | 36.3 ~ 37.2 m |
-| `flown` | 32.1 ~ 32.3 m |
-| `duration` | 10.7 ~ 10.8 s |
-| `mean_speed` | 3.00 m/s（稳定） |
-| `max_dev` | 1.25 ~ 1.26 m |
+所以下面把两种形态的数据都列出来，并只用**形态内部**的数字做比较。
 
-**稳定的是判定性的量**（`skipped = 0`、`mean_speed = goal_velocity`、`max_dev < lookahead`），
-浮动的是路径长度这类受地图细节影响的量。复现时不必追求与上表逐位相同。
+| 指标 | 样条被接受（73 点） | 样条被拒绝（10~11 点） |
+|---|---|---|
+| 到达 / 跳过 | 73 / 0 | 10~11 / 0 |
+| `path` | 33.52 m | 36.3 ~ 37.2 m |
+| `flown` | 31.80 ~ 31.95 m | 32.1 ~ 32.3 m |
+| `approach` | 0.00 m / 0.00 s | 0.00 ~ 0.30 m |
+| `duration` | 10.59 ~ 10.65 s | 10.7 ~ 10.8 s |
+| `mean_speed` | 3.00 m/s | 3.00 m/s |
+| `max_dev` | 0.41 m | 1.25 ~ 1.26 m |
+| 切内角省下的路程 | 4.7% | 13% |
+
+**稳定的是判定性的量**：`skipped = 0`（全部到达）、`mean_speed` 正好等于 `goal_velocity`、
+`max_dev` 小于 `lookahead`。这三条在两种形态、多次运行里都成立。
+
+**浮动的是路径形态相关的量**：航点数、`path`、`max_dev`。它们由"样条是否通过复检"
+和"地图自由叶数"（实测 17945 与 19366）共同决定，复现时不必追求逐位相同 ——
+按同形态的量对比即可。
+
+`max_dev` 与航点密度直接相关：73 点的样条路径几乎逐点走到了，偏离 0.41 m；
+10 点的折线只剩拐角，前瞻跳点会斜穿，偏离升到 1.25 m。
 
 #### 跟折线 vs 跟曲线
 
