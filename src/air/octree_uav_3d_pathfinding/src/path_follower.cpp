@@ -70,7 +70,6 @@ class PathFollower {
     opt_.lookahead = pnh_.param("lookahead", 1.5);
     opt_.finish_tolerance = pnh_.param("finish_tolerance", 0.5);
     opt_.per_point_timeout = pnh_.param("per_point_timeout", 15.0);
-    auto_start_ = pnh_.param("auto_start", true);
     publish_flown_ = pnh_.param("publish_flown", true);
 
     ROS_INFO("path_follower started");
@@ -82,7 +81,6 @@ class PathFollower {
              opt_.lookahead);
     ROS_INFO("  finish tol.   : %.2f m", opt_.finish_tolerance);
     ROS_INFO("  per-point t/o : %.1f s", opt_.per_point_timeout);
-    ROS_INFO("  auto start    : %s", auto_start_ ? "true" : "false");
 
     if (opt_.lookahead <= opt_.finish_tolerance) {
       ROS_WARN("lookahead (%.2f) <= finish_tolerance (%.2f): the vehicle will stop at "
@@ -123,14 +121,15 @@ class PathFollower {
     followReset(state_);
     length_ = followPolylineLength(path_);
     started_s_ = -1.0;
+    tracked_start_s_ = -1.0;
+    last_flown_pub_s_ = 0.0;
     flown_.clear();
+    flown_tracked_.clear();
 
     ROS_INFO("path received: %zu points, length %.2f m (tracking %s)",
              path_.size(), length_, path_topic_.c_str());
 
-    if (auto_start_) {
-      publishStatus("IDLE path received, waiting for the first pose");
-    }
+    publishStatus("IDLE path received, waiting for the first pose");
   }
 
   // ------------------------------------------------------------------
@@ -143,9 +142,13 @@ class PathFollower {
     const FollowVec3 pos = followVec(p.x, p.y, p.z);
     const double now = ros::Time::now().toSec();
 
-    if (!auto_start_ && state_.phase == FollowPhase::Idle) return;
-
     const FollowStep step = followStep(state_, path_, pos, now, opt_);
+
+    // "跟踪"从 index > 0 开始：index == 0 表示载具还在飞向路径起点（接近段）。
+    // 记下这个时刻，让 duration 与 flown 覆盖同一段轨迹，mean_speed 才有意义；
+    // 否则从上一趟终点飞回新路径起点的那段会被算进"跟踪"，速度与偏离都失真。
+    const bool tracked = (state_.phase != FollowPhase::Idle && state_.index > 0);
+    if (tracked && tracked_start_s_ < 0.0) tracked_start_s_ = now;
 
     // 记录实际轨迹（与规划路径对比用）
     if (publish_flown_ && state_.phase != FollowPhase::Idle) {
@@ -155,6 +158,7 @@ class PathFollower {
                                                         : msg->header.frame_id;
       ps.pose = msg->pose.pose;
       flown_.push_back(ps);
+      flown_tracked_.push_back(tracked);
 
       // 飞行中每秒发一次，让 RViz 里能看到轨迹**边飞边生长**；
       // 只在终点发一次的话，动图录不到过程，只有最后一条完整的线
@@ -197,25 +201,34 @@ class PathFollower {
   }
 
   void finish(double now) {
-    const double duration = (started_s_ >= 0.0) ? (now - started_s_) : 0.0;
+    // duration 与 flown 必须覆盖**同一段轨迹**：都只算"跟踪阶段"（index > 0）。
+    // 若载具是从别处飞过来的（接近段），那段既不计入 duration 也不计入 flown，
+    // 否则 mean_speed 会混进"飞向起点"的速度，读数失去意义。
+    const double t0 = (tracked_start_s_ >= 0.0) ? tracked_start_s_ : started_s_;
+    const double duration = (t0 >= 0.0) ? (now - t0) : 0.0;
 
-    // 平均速度必须用**实际飞过的距离**，不能用规划路径长度。
-    // 前瞻跳点会切内角，实际路程比规划路径短；用路径长度当分子算出来的
-    // 是"路径推进速率"，会虚高 —— 实测 37.22 m / 10.90 s = 3.41 m/s，
-    // 而载具的实际飞行速度上限是 goal_velocity = 3.0 m/s，物理上不可能超过。
-    const double flown = flownLength();
+    // 平均速度用**实际飞过的路程**，不用规划路径长度：前瞻跳点会切内角，
+    // 实际路程比路径短；用路径长度当分子算出来的是"路径推进速率"，会虚高
+    // （实测出现过 37.22 / 10.90 = 3.41 m/s，而设定速度是 3.0 m/s，物理上不可能）。
+    const double flown = flownLength(true);
+    const double all_flown = flownLength(false);
+    const double approach = (all_flown > flown) ? (all_flown - flown) : 0.0;
+    const double approach_s =
+        (tracked_start_s_ >= 0.0 && started_s_ >= 0.0)
+            ? (tracked_start_s_ - started_s_) : 0.0;
     const double mean_speed = (duration > 0.0) ? (flown / duration) : 0.0;
     const std::size_t skipped = state_.skipped;
     const std::size_t reached = path_.size() - skipped;
 
     ROS_INFO("follow: DONE | waypoints=%zu reached=%zu skipped=%zu | "
-             "path=%.2f m flown=%.2f m | duration=%.2fs | mean_speed=%.2f m/s "
-             "| max_dev=%.2f m",
-             path_.size(), reached, skipped, length_, flown, duration,
-             mean_speed, state_.max_deviation);
+             "path=%.2f m flown=%.2f m approach=%.2f m/%.2fs | duration=%.2fs "
+             "| mean_speed=%.2f m/s | max_dev=%.2f m",
+             path_.size(), reached, skipped, length_, flown, approach,
+             approach_s, duration, mean_speed, state_.max_deviation);
 
-    // flown < path 就是"切内角"的另一个证据：少走的那部分，正是斜穿拐角省下的路
-    if (length_ > 0.0) {
+    // 只在"实际比路径短"时才谈切内角 —— 有接近段时 flown 可能反而更长，
+    // 那时百分比是负数，再说"shorter"就是错的
+    if (length_ > 0.0 && flown > 0.0 && flown < length_) {
       ROS_INFO("  corner cutting: flown is %.1f%% shorter than the path",
                100.0 * (length_ - flown) / length_);
     }
@@ -230,10 +243,15 @@ class PathFollower {
     }
   }
 
-  /// 实际飞过的总路程（m）：相邻位姿的欧氏距离累加。
-  double flownLength() const {
+  /// 实际飞过的路程（m）：相邻位姿的欧氏距离累加。
+  ///
+  /// @param tracked_only true = 只累加**两端都处于跟踪阶段**（index > 0）的线段，
+  ///                     即不含"飞向路径起点"的接近段；false = 全部轨迹。
+  ///                     两者之差就是 approach。
+  double flownLength(bool tracked_only) const {
     double total = 0.0;
     for (std::size_t i = 0; i + 1 < flown_.size(); ++i) {
+      if (tracked_only && !(flown_tracked_[i] && flown_tracked_[i + 1])) continue;
       const geometry_msgs::Point& a = flown_[i].pose.position;
       const geometry_msgs::Point& b = flown_[i + 1].pose.position;
       const double dx = a.x - b.x;
@@ -272,14 +290,17 @@ class PathFollower {
   std::string body_frame_;
 
   FollowOptions opt_;
-  bool auto_start_ = true;
   bool publish_flown_ = true;
 
   FollowState state_;
   std::vector<FollowVec3> path_;
   std::vector<geometry_msgs::PoseStamped> flown_;
+  /// 与 flown_ 一一对应：该位姿是否处于跟踪阶段（index > 0）。
+  /// 用来把"飞向路径起点"的接近段从 flown / duration 里排除。
+  std::vector<bool> flown_tracked_;
   double length_ = 0.0;
-  double started_s_ = -1.0;
+  double started_s_ = -1.0;          ///< 第一次下发航点的时刻
+  double tracked_start_s_ = -1.0;    ///< 进入跟踪阶段（index > 0）的时刻
   double last_flown_pub_s_ = 0.0;   ///< 上次发布实际轨迹的时刻（飞行中限流到 1 Hz）
 
   ros::Publisher goal_pub_;

@@ -213,7 +213,5 @@ path_follower:
   # 单个航点超时（s）。超时跳过；终点超时则直接结束
   per_point_timeout: 15.0
 
-  # 收到第一条合格路径就自动开始跟踪
-  auto_start: true
   # 是否发布实际飞过的轨迹（/uav/flown_path）
   publish_flown: true

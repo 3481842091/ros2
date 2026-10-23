@@ -34,10 +34,16 @@
   <arg name="smoothing" default="true"/>
   <!-- 是否启动路径跟踪 -->
   <arg name="following" default="true"/>
-  <!-- 跟踪哪条路径：默认用 P5 平滑后的曲线。
-       切 /uav/path 可以对比"跟原始折线"与"跟平滑曲线"的差别
-       （折线航点密、转向多，max_dev 更小但耗时更长）。 -->
-  <arg name="path_topic" default="/uav/path_smooth"/>
+  <!-- 跟踪哪条路径。默认随 smoothing 走：关掉平滑时规划器不发布 /uav/path_smooth，
+       跟踪节点若仍订阅它就会一条路径都收不到。也可以显式覆盖，做"跟折线 vs 跟曲线"对照。
+       注意比较方式：roslaunch 的 arg() 在 eval 里可能返回布尔 True 而不是字符串 'true'，
+       所以这里用 str(...).lower() != 'false' 判断，两种返回类型都成立。 -->
+  <arg name="path_topic"
+       default="$(eval '/uav/path_smooth' if str(arg('smoothing')).lower() != 'false' else '/uav/path')"/>
+  <!-- 桥接节点听哪个话题。默认随 following 走：不启动跟踪节点时
+       （following:=false）没人往 /uav/goal_cmd 发航点，桥接节点必须回到 /uav/goal。 -->
+  <arg name="bridge_goal_topic"
+       default="$(eval '/uav/goal_cmd' if str(arg('following')).lower() != 'false' else '/uav/goal')"/>
 
   <!-- 基础链路（建图 + 规划 + 可选 RViz/自检） -->
   <include file="$(find octree_uav_3d_pathfinding)/launch/main.launch">
@@ -47,8 +53,8 @@
     <arg name="body_frame" value="$(arg body_frame)"/>
     <arg name="inflation_radius" value="$(arg inflation_radius)"/>
     <arg name="smoothing" value="$(arg smoothing)"/>
-    <!-- ★ 关键：桥接节点改听 /uav/goal_cmd，与规划器用的 /uav/goal 分开 -->
-    <arg name="bridge_goal_topic" value="/uav/goal_cmd"/>
+    <!-- ★ 关键：跟踪开启时桥接节点听 /uav/goal_cmd，与规划器用的 /uav/goal 分开 -->
+    <arg name="bridge_goal_topic" value="$(arg bridge_goal_topic)"/>
   </include>
 
   <!-- 路径跟踪节点：订阅 /uav/path_smooth 与位姿，向 /uav/goal_cmd 逐点下发航点。

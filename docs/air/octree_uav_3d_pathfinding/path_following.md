@@ -187,7 +187,6 @@ dist = ‖当前位置 − path[index]‖
 | `lookahead` | 1.5 | 距当前航点该距离内切换下一点（m） |
 | `finish_tolerance` | 0.5 | 到达终点的判定距离（m），约 2 倍地图分辨率 |
 | `per_point_timeout` | 15.0 | 单点超时（s） |
-| `auto_start` | true | 收到第一条合格路径就自动开始 |
 | `publish_flown` | true | 是否发布实际轨迹 |
 
 `airsim_bridge` 组新增：
@@ -209,11 +208,33 @@ source ~/uav_ws/devel/setup.bash
 
 # 闭环飞行：完整链路（桥接 + 建图 + 规划 + 跟踪 + 自检 + RViz）
 roslaunch octree_uav_3d_pathfinding full_demo.launch
+```
 
-# 用 mock 点云离线验证（不起模拟器）
+### 6.1 用 mock 场景离线验证（不起模拟器）
+
+`bridge:=false` 只是不启动桥接节点，它**不提供**点云与位姿。所以离线验证要另外起两个节点，
+各占一个终端；否则没有 `/cloud_in`、没有 `/ground_truth/odom`，规划器和跟踪节点都不会动：
+
+```shell
+# 终端 1：roscore
+roscore
+
+# 终端 2：点云（巡游 40 秒填满地图，之后停在 (-7.5, 7.5)）
+rosrun octree_uav_3d_pathfinding mock_cloud_publisher.py
+
+# 终端 3：假载具（位姿来源）。起点对齐路径起点，避免多一段"飞向起点"
+rosrun octree_uav_3d_pathfinding mock_uav_mover.py \
+    _start_x:=-7.5 _start_y:=7.5 _start_z:=0.0
+
+# 终端 4：链路本身
 roslaunch octree_uav_3d_pathfinding full_demo.launch \
     bridge:=false check:=false body_frame:=lidar_link
 ```
+
+> 若不传 `_start_x/_start_y`，假载具从 `(0, 0, 0)` 起飞，会先飞 22.5 m 到路径起点。
+> 那段"接近段"不计入 `flown` 与 `duration`（见下表的 `approach` 字段），但会拉长总耗时。
+
+### 6.2 下发目标点
 
 飞行器起飞、扫描一段时间地图建起来之后，下发**一次**目标点即可，后续由跟踪节点接管：
 
@@ -224,20 +245,21 @@ rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 7.5, y: -7.5, z: 2.0}"
 到达终点后节点会打印统计：
 
 ```
-follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.22 m flown=32.85 m
-        | duration=10.9s | mean_speed=3.01 m/s | max_dev=1.21 m
-  corner cutting: flown is 11.7% shorter than the path
+follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.16 m flown=32.25 m
+        approach=0.30 m/0.10s | duration=10.75s | mean_speed=3.00 m/s | max_dev=1.25 m
+  corner cutting: flown is 13.2% shorter than the path
 ```
 
 | 字段 | 含义 |
 |---|---|
 | `waypoints` / `reached` / `skipped` | 路径点数、到达数、因超时跳过的数量 |
 | `path` | 要跟踪的路径总长（m） |
-| `flown` | **实际飞过的路程**（m），相邻位姿距离累加 |
-| `duration` | 从第一次下发航点到到达的耗时（s） |
+| `flown` | **跟踪阶段**实际飞过的路程（m），不含接近段 |
+| `approach` | 载具飞向路径起点的那一段：路程（m）/ 耗时（s） |
+| `duration` | 进入跟踪阶段到到达终点（s），与 `flown` 覆盖同一段轨迹 |
 | `mean_speed` | `flown / duration`，即真实平均速度；上限是 `goal_velocity` |
 | `max_dev` | 实际轨迹到规划折线的最大距离（m），即 §4.1 里"切内角"的程度 |
-| `corner cutting` | `path` 与 `flown` 的相对差；斜穿拐角省下的路 |
+| `corner cutting` | `path` 与 `flown` 的相对差；斜穿拐角省下的路。仅当 `flown < path` 时打印 |
 
 两个口径必须分清：
 
@@ -257,7 +279,7 @@ follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.22 m flown=32.85 m
 ### 7.1 离线单元测试
 
 `tests/test_path_follower.cpp`，只依赖 STL —— 不需要 ROS 运行时、不需要 octomap、不需要模拟器。
-被测对象是 `path_follow_core.h` 里的纯函数。实测 **46 项检查全部通过**。
+被测对象是 `path_follow_core.h` 里的纯函数。实测 **49 项检查全部通过**。
 
 | 用例 | 验证内容 |
 |---|---|
@@ -286,28 +308,58 @@ follow: DONE | waypoints=10 reached=10 skipped=0 | path=37.22 m flown=32.85 m
 不做碰撞判定。它替代的是桥接节点的位姿发布，不是飞行物理，所以这组数据只反映**跟踪逻辑**，
 不反映真实飞行品质。
 
-结果（跟踪 P5 平滑后的路径）：
+测量条件（下面两组数据都在这套条件下取得，复现时要一致）：
+
+| 项 | 值 |
+|---|---|
+| 假载具起点 | `(-7.5, 7.5, 0.0)`（与路径起点对齐，`approach = 0`） |
+| `inflation_radius` | 0.6 |
+| `smoothing` | true |
+| `lookahead` / `finish_tolerance` | 1.5 m / 0.5 m |
+| `goal_velocity` | 3.0 m/s |
+
+**起点必须对齐**：假载具默认起点是 `(0, 0, 0)`，此时它会先飞 22.5 m 到路径起点，
+那段"接近段"会让总耗时从 10.7 s 变成 13.3 s 左右。日志里 `approach` 字段单独给出这部分，
+`flown` 与 `duration` 都只算跟踪阶段。
+
+结果（跟踪 P5 平滑后的路径，一次运行）：
 
 | 指标 | 值 |
 |---|---|
-| 路径点数 / 到达 / 跳过 | 11 / 11 / 0 |
-| 规划路径长度 `path` | 36.28 m |
-| 实际飞行路程 `flown` | 32.10 m |
-| 耗时 | 10.70 s |
+| 路径点数 / 到达 / 跳过 | 10 / 10 / 0 |
+| 规划路径长度 `path` | 37.16 m |
+| 跟踪阶段飞行路程 `flown` | 32.25 m |
+| 接近段 `approach` | 0.30 m / 0.10 s |
+| 耗时 `duration` | 10.75 s |
 | 平均速度 | 3.00 m/s（= `goal_velocity`） |
-| 到路径的最大偏离 `max_dev` | 1.26 m（< `lookahead` 1.5 m） |
-| 切内角省下的路程 | 11.5%（`(path − flown) / path`） |
+| 到路径的最大偏离 `max_dev` | 1.25 m（< `lookahead` 1.5 m） |
+| 切内角省下的路程 | 13.2%（`(path − flown) / path`） |
 
 **这组数据自洽**：`flown / duration = 3.00`，正好等于设定速度；
-`max_dev` 与"少走 11.5% 路程"是同一件事的两种度量 —— 前瞻跳点斜穿拐角，
+`max_dev` 与"少走 13% 路程"是同一件事的两种度量 —— 前瞻跳点斜穿拐角，
 既让轨迹偏离路径，也缩短了实际路程。
 
-> 待补：用 `path_topic:=/uav/path`（跟原始折线）跑同一场景做对照，
-> 预期 `max_dev` 更小、但 `duration` 更长（折线航点密、转向多）。
+**重复运行会有小幅波动**：mock 传感器巡游时序会影响地图的自由叶数量
+（实测两次分别是 17945 与 19366），A\* 因此可能选出略不同的路径。
+多次运行的观测范围：
+
+| 指标 | 范围 |
+|---|---|
+| 航点数 | 10 ~ 11 |
+| `path` | 36.3 ~ 37.2 m |
+| `flown` | 32.1 ~ 32.3 m |
+| `duration` | 10.7 ~ 10.8 s |
+| `mean_speed` | 3.00 m/s（稳定） |
+| `max_dev` | 1.25 ~ 1.26 m |
+
+**稳定的是判定性的量**（`skipped = 0`、`mean_speed = goal_velocity`、`max_dev < lookahead`），
+浮动的是路径长度这类受地图细节影响的量。复现时不必追求与上表逐位相同。
 
 #### 跟折线 vs 跟曲线
 
-同一场景、同一目标点，只改 `path_topic`：
+同一场景、同一目标点，只改 `path_topic`。下表是**另一次运行**的对照
+（同一张地图、同一个规划结果的两条路径；与上一节的数值属于不同次运行，
+差值来自地图自由叶数的波动，见上面的范围表）：
 
 | 指标 | 跟原始折线 `/uav/path` | 跟平滑路径 `/uav/path_smooth` |
 |---|---|---|
