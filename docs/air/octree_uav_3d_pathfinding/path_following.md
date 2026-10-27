@@ -286,7 +286,8 @@ follow: DONE | waypoints=73 reached=73 skipped=0 final_timed_out=0 | path=33.52 
   那一段是"接近段"，本来就不在路径上；计入的话，一次从上一趟终点飞回新起点的
   22.5 m 直线会把 `max_dev` 拉到 5 m 以上，指标就失去意义。
 
-`reached` 的口径是 `waypoints - skipped`：终点超时结束时，它仍被算作到达。
+`reached` 的口径是 `waypoints - skipped - final_timed_out`：终点若是超时收尾
+（没进 `finish_tolerance`），它不再算作到达，日志里也会把 `final_timed_out` 标成 1。
 
 ---
 
@@ -295,15 +296,17 @@ follow: DONE | waypoints=73 reached=73 skipped=0 final_timed_out=0 | path=33.52 
 ### 7.1 离线单元测试
 
 `tests/test_path_follower.cpp`，只依赖 STL —— 不需要 ROS 运行时、不需要 octomap、不需要模拟器。
-被测对象是 `path_follow_core.h` 里的纯函数。实测 **49 项检查全部通过**。
+被测对象是 `path_follow_core.h` 里的纯函数。实测 **59 项检查全部通过**。
 
 | 用例 | 验证内容 |
 |---|---|
 | 前瞻切换 | 进 `lookahead` 就切换并下发；起点在脚下时直接从 0 跳到 1 |
 | **边界：恰好等于 `lookahead`** | **不切换**（用 `<` 而不是 `<=`） |
 | 终点判定 | 最后一个点距 1.0 m（小于 `lookahead`）**不算到达**，只认 `finish_tolerance` |
+| **容差 1.0 m（真机默认）** | 距 1.2 m 不算到达、距 0.9 m 算到达，且不置 `final_timed_out` |
 | 超时 | 中间点超时跳过并计数；前进一次就重新计时 |
-| **终点超时** | **直接结束，不计入 `skipped`**（否则永远到不了终点） |
+| **终点超时** | **直接结束，不计入 `skipped`**，但置 `final_timed_out` |
+| **进容差恰好撞上超时那一拍** | **先判到达、再判超时**：算 Finished，不记成超时收尾 |
 | 新路径复位 | 复位后回到 `IDLE`、下标归零、`skipped` 与 `max_dev` 清零 |
 | 退化输入 | 空路径 / 单点路径被忽略；重复点组成的退化线段不产生 NaN |
 | 偏离度量 | 到**折线**而非到航点；折返路径同样正确；历史最大值只增不减 |

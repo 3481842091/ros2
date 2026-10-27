@@ -67,8 +67,10 @@ class PathFollower {
     body_frame_ = pnh_.param<std::string>("body_frame", "base_link");
 
     // ---------------- 参数 ----------------
+    // 回退值（yaml 里没有这一项时用的）必须与 FollowOptions 的默认值、以及
+    // config/params.yaml 三者一致，否则 rosrun 直接起节点时会悄悄退回旧行为。
     opt_.lookahead = pnh_.param("lookahead", 1.5);
-    opt_.finish_tolerance = pnh_.param("finish_tolerance", 0.5);
+    opt_.finish_tolerance = pnh_.param("finish_tolerance", 1.0);
     opt_.per_point_timeout = pnh_.param("per_point_timeout", 15.0);
     publish_flown_ = pnh_.param("publish_flown", true);
 

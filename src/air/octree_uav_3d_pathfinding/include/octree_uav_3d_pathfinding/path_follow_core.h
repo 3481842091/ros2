@@ -102,8 +102,11 @@ struct FollowOptions {
   /// **必须明显大于 finish_tolerance**，否则退化成"每点停稳"。
   double lookahead = 1.5;
 
-  /// 判定"到达终点"的距离（m）。约 2 倍地图分辨率。
-  double finish_tolerance = 0.5;
+  /// 判定"到达终点"的距离（m）。
+  /// 不能只按"约 2 倍地图分辨率"取：AirSim 的位置环有稳态误差，本机实测约
+  /// 0.86 m，取 0.5 时末点永远够不着，只能等满 per_point_timeout 才收尾。
+  /// 默认值与 config/params.yaml 保持一致，改一处就要改另一处。
+  double finish_tolerance = 1.0;
 
   /// 单个航点的超时（s）。超时跳过该点；终点超时则直接结束。
   double per_point_timeout = 15.0;
@@ -196,35 +199,41 @@ static inline FollowStep followStep(FollowState& st,
   const double d = followDistance(path[st.index], pos);
   out.distance_to_index = d;
 
-  // 超时：中间点跳过，终点只收尾 —— 终点若也"跳过"，状态机就永远到不了 Done
-  if (now_s - st.last_progress_s > opt.per_point_timeout) {
-    out.timed_out = true;
-    if (st.index >= last) {
-      // 终点超时：载具没进容差就收尾了。单独记一个标志，
-      // 否则统计里 reached 会把"超时收尾"也算成"到达"（实测踩到过）。
-      out.is_final = true;
-      st.final_timed_out = true;
+  const bool is_last = (st.index >= last);
+  const bool over_time = (now_s - st.last_progress_s > opt.per_point_timeout);
+
+  // 终点：**先判是否已进容差，再判超时**。
+  // 顺序不能反 —— 反了会把"恰好卡在超时那一拍进入容差"记成超时收尾，
+  // 日志写着 WITHOUT reaching it，而载具其实已经到了（PR #596 评审指出）。
+  if (is_last) {
+    if (d < opt.finish_tolerance) {
       st.phase = FollowPhase::Done;
       out.action = FollowAction::Finished;
       out.index = last;
       return out;
     }
+    if (over_time) {
+      // 终点超时：确认没进容差才收尾。单独记标志，
+      // 否则统计里 reached 会把"超时收尾"也算成"到达"（实测踩到过）。
+      out.timed_out = true;
+      out.is_final = true;
+      st.final_timed_out = true;
+      st.phase = FollowPhase::Done;
+      out.action = FollowAction::Finished;
+      out.index = last;
+    }
+    return out;
+  }
+
+  // 中间点超时：跳过该点（终点不跳，否则永远到不了 Done）
+  if (over_time) {
+    out.timed_out = true;
     ++st.skipped;
     ++st.index;
     st.last_progress_s = now_s;
     out.action = FollowAction::Send;
     out.index = st.index;
     out.distance_to_index = followDistance(path[st.index], pos);
-    return out;
-  }
-
-  // 已经是最后一个点：只看到达容差，不做前瞻切换
-  if (st.index >= last) {
-    if (d < opt.finish_tolerance) {
-      st.phase = FollowPhase::Done;
-      out.action = FollowAction::Finished;
-      out.index = last;
-    }
     return out;
   }
 

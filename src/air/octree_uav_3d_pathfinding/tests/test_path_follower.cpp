@@ -114,7 +114,10 @@ void testFinishTolerance() {
   std::printf("\n[case 2] finish tolerance applies to the last waypoint only\n");
 
   const std::vector<FollowVec3> path = straightPath();
-  const FollowOptions opt;
+  FollowOptions opt;
+  // 这一组刻意用旧的 0.5：它验证的是"只认容差、不吃 lookahead 提前量"这条规则，
+  // 与容差取多大无关。真机默认值 1.0 的用例见 case 7。
+  opt.finish_tolerance = 0.5;
   FollowState st;
 
   followStep(st, path, followVec(0, 0, 0), 0.0, opt);   // → index 1
@@ -287,6 +290,56 @@ void testMaxDeviationUsesSegments() {
             "doubled-back polyline length is 20 m");
 }
 
+// ---------------------------------------------------------------------------
+// 用例 7：finish_tolerance = 1.0（真机默认值）也必须判得到
+// ---------------------------------------------------------------------------
+void testFinishToleranceOneMetre() {
+  std::printf("\n[case 7] arrival with finish_tolerance = 1.0 (the real default)\n");
+
+  const std::vector<FollowVec3> path = straightPath();
+  FollowOptions opt;
+  opt.finish_tolerance = 1.0;
+  FollowState st;
+
+  followStep(st, path, followVec(0, 0, 0), 0.0, opt);   // → index 1
+  followStep(st, path, followVec(8.6, 0, 0), 1.0, opt); // → index 2（最后一个）
+  check(st.index == 2, "precondition: standing on the last waypoint");
+
+  // 距终点 1.2 m > 1.0 → 不算到达
+  FollowStep s = followStep(st, path, followVec(18.8, 0, 0), 2.0, opt);
+  check(s.action == FollowAction::None,
+        "1.2 m away is NOT arrival with tolerance 1.0");
+
+  // 距终点 0.9 m < 1.0 → 到达
+  s = followStep(st, path, followVec(19.1, 0, 0), 3.0, opt);
+  check(s.action == FollowAction::Finished,
+        "0.9 m away finishes with tolerance 1.0");
+  check(!st.final_timed_out,
+        "arrival within tolerance is not flagged as a timeout wrap-up");
+}
+
+// ---------------------------------------------------------------------------
+// 用例 8：已进容差却恰好落在超时那一拍 —— 必须先判到达
+// ---------------------------------------------------------------------------
+void testArrivalOnTimeoutTick() {
+  std::printf("\n[case 8] inside tolerance on the very tick of the timeout\n");
+
+  const std::vector<FollowVec3> path = straightPath();
+  const FollowOptions opt;   // finish_tolerance 1.0、per_point_timeout 15 s
+  FollowState st;
+
+  followStep(st, path, followVec(0, 0, 0), 0.0, opt);   // → index 1, progress @ 0
+  followStep(st, path, followVec(8.6, 0, 0), 1.0, opt); // → index 2, progress @ 1
+
+  // 距终点 0.5 m（在 1.0 容差内），而时间已越过 15 s 超时线：
+  // 顺序若写反，这里会被记成"超时收尾、没有到达"（PR #596 评审指出的用例）
+  FollowStep s = followStep(st, path, followVec(19.5, 0, 0), 17.0, opt);
+  check(s.action == FollowAction::Finished, "finishes");
+  check(!st.final_timed_out,
+        "already inside tolerance is NOT a timeout wrap-up");
+  check(!s.timed_out, "no timeout is reported for an in-tolerance arrival");
+}
+
 }  // namespace
 
 int main() {
@@ -298,6 +351,8 @@ int main() {
   testResetOnNewPath();
   testDegenerateInput();
   testMaxDeviationUsesSegments();
+  testFinishToleranceOneMetre();
+  testArrivalOnTimeoutTick();
 
   std::printf("\n=== %d checks, %d failed ===\n", g_checks, g_failed);
   return (g_failed == 0) ? 0 : 1;
