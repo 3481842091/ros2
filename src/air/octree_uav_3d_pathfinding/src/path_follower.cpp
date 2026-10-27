@@ -229,7 +229,7 @@ class PathFollower {
     const std::size_t skipped = state_.skipped;
     // reached 只算"真正进了 finish_tolerance"的航点：终点若是超时收尾，
     // 必须一起扣掉，否则日志会给出"8/8 全部到达"这种与事实不符的结论
-    // （2026-10-26 真机实测踩到：末点停在 0.86 m 外超时，统计却报 reached=8）。
+    // （2026-10-26 在 AirSim 上实测踩到：末点停在 0.86 m 外超时，统计却报 reached=8）。
     const std::size_t timed_out_final = state_.final_timed_out ? 1 : 0;
     const std::size_t reached = path_.size() - skipped - timed_out_final;
 

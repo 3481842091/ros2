@@ -116,7 +116,7 @@ void testFinishTolerance() {
   const std::vector<FollowVec3> path = straightPath();
   FollowOptions opt;
   // 这一组刻意用旧的 0.5：它验证的是"只认容差、不吃 lookahead 提前量"这条规则，
-  // 与容差取多大无关。真机默认值 1.0 的用例见 case 7。
+  // 与容差取多大无关。AirSim 上用的默认值 1.0 的用例见 case 7。
   opt.finish_tolerance = 0.5;
   FollowState st;
 
@@ -291,7 +291,7 @@ void testMaxDeviationUsesSegments() {
 }
 
 // ---------------------------------------------------------------------------
-// 用例 7：finish_tolerance = 1.0（真机默认值）也必须判得到
+// 用例 7：finish_tolerance = 1.0（AirSim 上用的默认值）也必须判得到
 // ---------------------------------------------------------------------------
 void testFinishToleranceOneMetre() {
   std::printf("\n[case 7] arrival with finish_tolerance = 1.0 (the real default)\n");
