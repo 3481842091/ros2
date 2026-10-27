@@ -169,8 +169,15 @@ class PathFollower {
     }
 
     if (step.timed_out) {
-      ROS_WARN("waypoint %zu timed out after %.1f s (distance %.2f m); skipping",
-               step.index, opt_.per_point_timeout, step.distance_to_index);
+      if (step.is_final) {
+        // 终点超时是"收尾"，不是"跳过"：这里如实说清楚，避免日志与统计对不上
+        ROS_WARN("final waypoint timed out after %.1f s (distance %.2f m); "
+                 "finishing WITHOUT reaching it",
+                 opt_.per_point_timeout, step.distance_to_index);
+      } else {
+        ROS_WARN("waypoint %zu timed out after %.1f s (distance %.2f m); skipping",
+                 step.index, opt_.per_point_timeout, step.distance_to_index);
+      }
     }
 
     switch (step.action) {
@@ -218,13 +225,18 @@ class PathFollower {
             ? (tracked_start_s_ - started_s_) : 0.0;
     const double mean_speed = (duration > 0.0) ? (flown / duration) : 0.0;
     const std::size_t skipped = state_.skipped;
-    const std::size_t reached = path_.size() - skipped;
+    // reached 只算"真正进了 finish_tolerance"的航点：终点若是超时收尾，
+    // 必须一起扣掉，否则日志会给出"8/8 全部到达"这种与事实不符的结论
+    // （2026-10-26 真机实测踩到：末点停在 0.86 m 外超时，统计却报 reached=8）。
+    const std::size_t timed_out_final = state_.final_timed_out ? 1 : 0;
+    const std::size_t reached = path_.size() - skipped - timed_out_final;
 
-    ROS_INFO("follow: DONE | waypoints=%zu reached=%zu skipped=%zu | "
+    ROS_INFO("follow: DONE | waypoints=%zu reached=%zu skipped=%zu "
+             "final_timed_out=%zu | "
              "path=%.2f m flown=%.2f m approach=%.2f m/%.2fs | duration=%.2fs "
              "| mean_speed=%.2f m/s | max_dev=%.2f m",
-             path_.size(), reached, skipped, length_, flown, approach,
-             approach_s, duration, mean_speed, state_.max_deviation);
+             path_.size(), reached, skipped, timed_out_final, length_, flown,
+             approach, approach_s, duration, mean_speed, state_.max_deviation);
 
     // 只在"实际比路径短"时才谈切内角 —— 有接近段时 flown 可能反而更长，
     // 那时百分比是负数，再说"shorter"就是错的

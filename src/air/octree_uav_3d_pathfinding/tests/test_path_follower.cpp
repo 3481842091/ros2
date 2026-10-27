@@ -154,6 +154,7 @@ void testTimeouts() {
   check(s.timed_out, "timeout is reported");
   check(s.action == FollowAction::Send, "after skipping we send the next goal");
   check(st.skipped == 1, "skipped counter incremented");
+  check(!st.final_timed_out, "intermediate timeout does not set final_timed_out");
   check(st.index == 2, "index advanced past the timed-out waypoint");
 
   // 终点也超时 → 直接结束，**不**跳过一个不存在的点
@@ -162,6 +163,7 @@ void testTimeouts() {
   check(s.action == FollowAction::Finished, "timeout on the last waypoint finishes");
   check(st.phase == FollowPhase::Done, "phase becomes Done on final timeout");
   check(st.skipped == 1, "the final waypoint is not counted as skipped");
+  check(st.final_timed_out, "final timeout is flagged separately (final_timed_out)");
 
   // 超时按"距上次前进"计，前进一次就会重新计时
   FollowState st2;
@@ -189,6 +191,7 @@ void testResetOnNewPath() {
   check(st.phase == FollowPhase::Idle, "reset returns to Idle");
   check(st.index == 0, "reset clears the index");
   check(st.skipped == 0, "reset clears the skipped counter");
+  check(!st.final_timed_out, "reset clears final_timed_out");
   checkNear(st.max_deviation, 0.0, 1e-12, "reset clears max deviation");
 
   // 复位后从新路径的起点重新开始

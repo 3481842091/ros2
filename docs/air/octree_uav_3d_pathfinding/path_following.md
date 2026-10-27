@@ -185,7 +185,7 @@ dist = ‖当前位置 − path[index]‖
 | `status_topic` | `/uav/follow_status` | 状态文本 |
 | `flown_topic` | `/uav/flown_path` | 实际轨迹 |
 | `lookahead` | 1.5 | 距当前航点该距离内切换下一点（m） |
-| `finish_tolerance` | 0.5 | 到达终点的判定距离（m），约 2 倍地图分辨率 |
+| `finish_tolerance` | 1.0 | 到达终点的判定距离（m）。不能只按"约 2 倍地图分辨率"取：AirSim 的位置环有稳态误差，本机实测 0.86 m，取 0.5 时末点永远够不着（见 §7.4） |
 | `per_point_timeout` | 15.0 | 单点超时（s） |
 | `publish_flown` | true | 是否发布实际轨迹 |
 
@@ -245,7 +245,7 @@ rostopic pub -1 /uav/goal geometry_msgs/Point "{x: 7.5, y: -7.5, z: 2.0}"
 到达终点后节点会打印统计：
 
 ```
-follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
+follow: DONE | waypoints=73 reached=73 skipped=0 final_timed_out=0 | path=33.52 m flown=31.95 m
         approach=0.00 m/0.00s | duration=10.65s | mean_speed=3.00 m/s | max_dev=0.41 m
   corner cutting: flown is 4.7% shorter than the path
 ```
@@ -253,6 +253,7 @@ follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
 | 字段 | 含义 |
 |---|---|
 | `waypoints` / `reached` / `skipped` | 路径点数、到达数、因超时跳过的数量 |
+| `final_timed_out` | 终点是否为"超时收尾"（1 = 没进 `finish_tolerance` 就结束）。此时它不计入 `reached` |
 | `path` | 要跟踪的路径总长（m） |
 | `flown` | **跟踪阶段**实际飞过的路程（m），不含接近段 |
 | `approach` | 载具飞向路径起点的那一段：路程（m）/ 耗时（s） |
@@ -317,7 +318,7 @@ follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
 | `smoothing` | true |
 | `smoothing_shortcut` / `smoothing_spline` | true / true |
 | `smoothing_samples_per_segment` | 8（默认） |
-| `lookahead` / `finish_tolerance` / `per_point_timeout` | 1.5 m / 0.5 m / 15 s |
+| `lookahead` / `finish_tolerance` / `per_point_timeout` | 1.5 m / 1.0 m / 15 s |
 | `goal_velocity` | 3.0 m/s |
 | 启动命令 | `full_demo.launch bridge:=false check:=false body_frame:=lidar_link` |
 
@@ -394,9 +395,41 @@ follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
 黄线与青线的间距就是该次运行的 `max_dev`（1.26 m）的直观形态：
 前瞻跳点斜穿拐角，轨迹因此偏在路径内侧。
 
-> 待补：AirSim 真机上的飞行动图。录制要求见 §8 第 5 条 —— 飞低、飞远、斜视视角。
-> 真机与离线场景的差别在于**动力学**：假载具没有加减速与转向耗时，
-> 所以这段动图只能说明跟踪逻辑跑通，不能说明真实飞行品质。
+真机与离线场景的差别在于**动力学**：假载具没有加减速与转向耗时，
+所以上面这段只能说明跟踪逻辑跑通，不能说明真实飞行品质。真实飞行见 §7.4。
+
+### 7.4 AirSim 上的闭环飞行
+
+2026-10-27 在 AirSim（OpenHUTB 发行版，Town10HD 场景）上跑通完整闭环：
+桥接 → 建图 → A\* → 安全裕度与平滑 → 跟踪 → 飞行。飞机从 `(-31.65, -8.55, 7.95)`
+飞到 `(-45.15, 1.35, 7.65)`，两点直线 16.74 m。
+
+![AirSim 上的闭环飞行：绿色为规划的原始路径，青色为平滑路径，黄色为实际飞过的轨迹](../../img/air/octree_uav_3d_pathfinding/p6_flight_airsim.gif)
+
+> **这份动图的视角偏远**（录制时 RViz 的 `Distance` 约 120 m），路径只占画面中部的一小块，
+> 点云与展开节点也在同一屏里，读图时需要先找到那条折线。录制时把 `SensorCloud` 与
+> `AStarExplored` 关掉、`Distance` 收到 40~60 m、路径线宽加到 0.08 m，绕行会更清楚。
+> 这一版保留的是首次录制的原始视角，没有为了好看而重录。
+
+| 指标 | 值 |
+|---|---|
+| 规划 | `expanded` 14374、`discovered` 33220、326.9 ms |
+| 原始路径 | 63 点、27.91 m、`kappa_max` 2.321 1/m、最小间隙 0.75 m |
+| 平滑 | 63 → 26 点、26.87 m；**样条被碰撞复检拒绝**，退回捷径折线；最小间隙提到 1.65 m |
+| 绕行比 | 27.91 / 16.74 = **1.67**（按平滑后 26.87 m 算为 1.60） |
+| 飞行 | 12.30 s、`flown` 25.82 m、`mean_speed` 2.10 m/s、`max_dev` 1.12 m |
+| 终点判定 | `final_timed_out = 0`，即真正进了 `finish_tolerance`，不是超时收尾 |
+
+三点需要如实说明：
+
+1. **12.30 s 短于 §8 第 5 条建议的 15~25 s。** 这次两点直线只有 16.74 m，行程长度是靠
+   绕行（1.67 倍）撑起来的。要更长就得有更大的已扫描范围，而"未知 = 障碍"
+   把可规划区域限制在雷达量程以内。
+2. **样条又一次被复检拒绝**，与 §7.2 里第二种形态同因：真机地图更稀疏，平滑曲线
+   更容易擦到障碍。退回折线是复检在起作用的证据，不是平滑失败。
+3. **细枝、细杆进不了八叉树**（0.3 m 分辨率 + 稀疏采样），规划器会把它们当成可通行。
+   这一轮实测里载具撞到过树枝，靠物理引擎自行脱困，但轨迹会短暂偏离。
+   这是感知分辨率与碰撞模型之间的固有缺口，见 §8 第 6 条。
 
 ---
 
@@ -408,7 +441,8 @@ follow: DONE | waypoints=73 reached=73 skipped=0 | path=33.52 m flown=31.95 m
 | 2 | **坐标只需要 ROS 世界系 ENU** | 世界系 z 偏移与 NED↔ENU 转换都在桥接节点内部完成，跟踪节点不要重复计算 |
 | 3 | **目标点必须落在已扫描区域** | 可通行判定把"未知"当障碍，目标点在未扫描区时 A\* 直接失败。所以流程是"先扫描、再下发目标" |
 | 4 | **航点被吸附到八叉树叶中心** | 终点不会精确等于下发值，判定要用容差 |
-| 5 | **动图的拍摄要求** | 飞低、飞远、斜视视角：高度取 2~4 m，让载具处在障碍之间而非其上；路径跨越房间对角；单次飞行 15~25 s |
+| 5 | **动图的拍摄要求** | 飞低、飞远、斜视视角：高度取 2~4 m，让载具处在障碍之间而非其上；路径跨越房间对角；单次飞行 15~25 s。**在有树冠的场景里高度要避开树冠带**：本项目实测 `z` 取 7~8 m 会撞树，贴着街道空域飞反而更安全 |
+| 6 | **细障碍看不见，碰撞仍会发生** | 0.3 m 分辨率下，直径小于一个体素的枝条、杆件常常不落进任何体素，激光采样也未必打中；规划器据此判为可通行，而 AirSim 的碰撞由物理引擎判定。实测撞到树枝后载具能自行脱困，但会短暂偏离路径。要缩小这个缺口得提高分辨率或降低飞行速度，两者都有代价 |
 
 ---
 
